@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# MuJoCo Menagerie (cloned separately, not tracked in git)
+mujoco_menagerie/
+
+# Output files (generated at runtime)
+output/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
