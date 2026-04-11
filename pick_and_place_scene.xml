@@ -1,92 +1,77 @@
 <mujoco model="pick_and_place_scene">
-  <!-- Include the Panda robot (same directory, so mesh paths resolve) -->
   <include file="panda.xml"/>
-
   <statistic center="0.4 0 0.4" extent="1"/>
-
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="150" elevation="-20"/>
   </visual>
-
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
-      width="512" height="3072"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
     <texture type="2d" name="groundplane" builtin="checker" mark="edge"
-      rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
-      width="300" height="300"/>
-    <material name="groundplane" texture="groundplane" texuniform="true"
-      texrepeat="5 5" reflectance="0.2"/>
+      rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <mesh name="cracker_box_visual" file="cracker_box_visual.stl"/>
+    <mesh name="mustard_bottle_visual" file="mustard_bottle_visual.stl"/>
+    <mesh name="sugar_box_visual" file="sugar_box_visual.stl"/>
   </asset>
-
   <worldbody>
-    <!-- Lighting -->
     <light pos="0.5 0 1.5" dir="0 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>
     <light pos="0.5 0.5 1.2" dir="0 -0.2 -1" diffuse="0.3 0.3 0.3"/>
-
-    <!-- Ground plane -->
-    <geom name="floor" size="0 0 0.05" type="plane" contype="3" conaffinity="3" material="groundplane"/>
-
-    <!-- TABLE: top surface at z = 0.4 -->
-    <!-- contype=2,conaffinity=2: collides with objects (contype=3) but NOT robot (contype=1) -->
-    <!-- This lets the gripper reach below the table edge to grasp objects -->
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="3" conaffinity="3"/>
     <body name="table" pos="0.5 0.0 0.2">
       <geom name="table_top" type="box" size="0.35 0.4 0.2"
-        rgba="0.85 0.85 0.80 1" mass="100"
-        contype="2" conaffinity="2"/>
+        rgba="0.85 0.85 0.80 1" mass="100" contype="2" conaffinity="2"/>
     </body>
-
-    <!-- OVERHEAD CAMERA: 1.0m above table surface, pointing straight down -->
-    <camera name="overhead_cam"
-      pos="0.5 0.0 1.4"
-      xyaxes="0 -1 0 1 0 0"
-      fovy="60"/>
-
-    <!-- FIXED OBSTACLE: blue cube on the table -->
+    <camera name="overhead_cam" pos="0.5 0.0 1.4" xyaxes="0 -1 0 1 0 0" fovy="60"/>
     <body name="obstacle" pos="0.45 0.15 0.45">
-      <geom name="obstacle_geom" type="box" size="0.03 0.03 0.03"
-        rgba="0.2 0.2 0.9 1" mass="0.5"/>
+      <geom name="obstacle_geom" type="box" size="0.03 0.03 0.03" rgba="0.2 0.2 0.9 1" mass="0.5"/>
     </body>
-
-    <!-- BASKET: red open-top container (5 box geoms) -->
-    <!-- 20cm x 20cm interior, 8cm tall walls -->
     <body name="basket" pos="0.55 -0.2 0.41">
       <freejoint name="basket_freejoint"/>
       <geom name="basket_floor" type="box" size="0.10 0.10 0.005" contype="3" conaffinity="3"
-        pos="0 0 0" rgba="0.85 0.15 0.15 1" mass="5.0"
-        friction="1.5 0.8 0.01"/>
+        pos="0 0 0" rgba="0.85 0.15 0.15 1" mass="5.0" friction="1.5 0.8 0.01"/>
       <geom name="basket_front" type="box" size="0.10 0.005 0.04"
-        pos="0 0.095 0.04" rgba="0.85 0.15 0.15 1"
-        contype="3" conaffinity="3"/>
+        pos="0 0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
       <geom name="basket_back" type="box" size="0.10 0.005 0.04"
-        pos="0 -0.095 0.04" rgba="0.85 0.15 0.15 1"
-        contype="3" conaffinity="3"/>
+        pos="0 -0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
       <geom name="basket_left" type="box" size="0.005 0.10 0.04"
-        pos="0.095 0 0.04" rgba="0.85 0.15 0.15 1"
-        contype="3" conaffinity="3"/>
+        pos="0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
       <geom name="basket_right" type="box" size="0.005 0.10 0.04"
-        pos="-0.095 0 0.04" rgba="0.85 0.15 0.15 1"
-        contype="3" conaffinity="3"/>
+        pos="-0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
     </body>
 
-    <!-- TEST OBJECT: multi-geom composite (yellow) with freejoint -->
-    <!-- Taller object (4cm half-height = 8cm total) so gripper can wrap around it -->
-    <body name="target_object" pos="0.4 -0.05 0.425">
-      <freejoint name="object_freejoint"/>
-      <geom name="obj_body" type="box" size="0.03 0.02 0.04"
-        rgba="0.95 0.85 0.2 1" mass="0.3"
-        friction="1.5 0.8 0.01" condim="4"
-        contype="3" conaffinity="3"/>
-      <geom name="obj_top" type="box" size="0.02 0.015 0.01"
-        pos="0 0 0.05" rgba="0.9 0.75 0.1 1" mass="0.05"
-        friction="1.5 0.8 0.01"
-        contype="3" conaffinity="3"/>
-      <geom name="obj_bump" type="cylinder" size="0.008 0.01"
-        pos="0.03 0 0" euler="0 1.5708 0" rgba="0.9 0.75 0.1 1" mass="0.02"
-        friction="1.5 0.8 0.01"
-        contype="3" conaffinity="3"/>
+    <!-- YCB 1: Cracker Box (yellow) - 16384-tri mesh at 0.5x scale -->
+    <!-- Scaled: 3.6x8.2x10.7cm. Laid flat: 3.6cm height, 8.2cm squeeze -->
+    <body name="cracker_box" pos="0.5 0.0 0.45">
+      <freejoint name="cracker_box_freejoint"/>
+      <geom name="cracker_box_vis" type="mesh" mesh="cracker_box_visual"
+        rgba="0.95 0.85 0.2 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
+      <geom name="cracker_box_col" type="box" size="0.018 0.041 0.054"
+        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.411"
+        rgba="0.95 0.85 0.2 0.0"/>
     </body>
 
+    <!-- YCB 2: Mustard Bottle (green) - 16384-tri mesh at 0.5x scale -->
+    <!-- Scaled: 4.9x3.3x9.6cm. Laid flat: 4.9cm height, 3.3cm squeeze -->
+    <body name="mustard_bottle" pos="0.5 0.0 10.0">
+      <freejoint name="mustard_bottle_freejoint"/>
+      <geom name="mustard_bottle_vis" type="mesh" mesh="mustard_bottle_visual"
+        rgba="0.2 0.85 0.3 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
+      <geom name="mustard_bottle_col" type="box" size="0.025 0.017 0.048"
+        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.603"
+        rgba="0.2 0.85 0.3 0.0"/>
+    </body>
+
+    <!-- YCB 3: Sugar Box (cyan) - 16384-tri mesh at 0.5x scale -->
+    <!-- Scaled: 2.5x4.7x8.8cm. Laid flat: 2.5cm height, 4.7cm squeeze -->
+    <body name="sugar_box" pos="0.5 0.0 10.0">
+      <freejoint name="sugar_box_freejoint"/>
+      <geom name="sugar_box_vis" type="mesh" mesh="sugar_box_visual"
+        rgba="0.2 0.85 0.85 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
+      <geom name="sugar_box_col" type="box" size="0.013 0.024 0.044"
+        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.514"
+        rgba="0.2 0.85 0.85 0.0"/>
+    </body>
   </worldbody>
 </mujoco>

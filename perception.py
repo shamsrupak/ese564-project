@@ -22,13 +22,23 @@ from scipy.spatial import KDTree
 # Pre-defined HSV ranges for each object/target
 # These are tuned for our MuJoCo scene colors
 COLOR_RANGES = {
+    # Cracker box: bright yellow
     "yellow_object": {
         "lower": np.array([15, 60, 60]),
         "upper": np.array([45, 255, 255]),
     },
+    # Mustard bottle: green
+    "green_object": {
+        "lower": np.array([35, 60, 60]),
+        "upper": np.array([85, 255, 255]),
+    },
+    # Sugar box: cyan
+    "cyan_object": {
+        "lower": np.array([80, 60, 60]),
+        "upper": np.array([100, 255, 255]),
+    },
+    # Basket: red (wraps around in HSV)
     "red_basket": {
-        # Red wraps around in HSV (0 and 180 are both red)
-        # So we use two ranges and combine them
         "lower1": np.array([0, 80, 50]),
         "upper1": np.array([10, 255, 255]),
         "lower2": np.array([170, 80, 50]),

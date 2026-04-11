@@ -94,7 +94,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     # Aiming too low causes the object to pop downward when squeezed.
     # Aiming at the upper third gives reliable grip without slippage.
     # perception gives surface height; object center is ~0.04 below surface
-    fingertip_grasp_z = obj_position[2] - 0.015
+    fingertip_grasp_z = obj_position[2] - 0.005
 
     # Hand position = fingertip position + offset
     hand_grasp_z = fingertip_grasp_z + HAND_TO_FINGERTIP

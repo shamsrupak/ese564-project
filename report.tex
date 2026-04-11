@@ -8,7 +8,7 @@
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning}
 
-\title{\textbf{Vision-Guided Tabletop Pick-and-Place\\with a Franka Panda in MuJoCo}}
+\title{\textbf{Vision-Guided Tabletop Pick-and-Place\\of YCB Objects with a Franka Panda in MuJoCo}}
 \author{Shams Rupak \quad \& \quad Sowmya Cheripally\\ESE 564: Robot Manipulation}
 \date{May 8, 2026}
 
@@ -17,8 +17,8 @@
 
 % ============================================================
 \begin{abstract}
-We implement a complete robot manipulation system that picks objects from
-randomized positions on a tabletop and places them into a basket whose
+We implement a complete robot manipulation system that picks YCB mesh objects
+from randomized positions on a tabletop and places them into a basket whose
 position also varies between episodes. The system uses a Franka Emika Panda
 7-DOF arm in MuJoCo, with an overhead RGB-D camera for perception.
 Our model-based pipeline consists of four stages: (1) HSV color segmentation
@@ -26,8 +26,11 @@ and depth back-projection for object localization, (2) top-down antipodal
 grasp planning with Cartesian waypoints, (3) iterative Jacobian pseudo-inverse
 inverse kinematics for joint-angle computation, and (4) a PD controller with
 supplementary torques and a combined descent-and-close grasp strategy.
-Evaluated across 90 randomized episodes, the system achieves an 82\% average
-success rate with a mean placement accuracy of 12\,mm for successful grasps.
+We demonstrate the system on three distinct YCB mesh objects (cracker box,
+mustard bottle, and sugar box), each consisting of 16,384 triangles. Evaluated
+across 150 randomized episodes (50 per object), the system achieves an overall
+72\% success rate, with per-object rates of 90\% (mustard bottle), 68\%
+(sugar box), and 58\% (cracker box).
 \end{abstract}
 
 % ============================================================
@@ -51,7 +54,8 @@ which was critical for tuning the grasping physics.
 Our system satisfies all four project requirements: (1) variability in both
 object and basket positions across episodes, (2) physics-based manipulation
 through MuJoCo contact forces, (3) perception from camera images rather than
-simulator state, and (4) a multi-geom composite object (not a single primitive).
+simulator state, and (4) objects represented as triangle meshes (16,384 faces
+each), not single geoms.
 
 % ============================================================
 \section{Method}
@@ -61,13 +65,19 @@ simulator state, and (4) a multi-geom composite object (not a single primitive).
 The simulation environment consists of a Franka Emika Panda 7-DOF arm
 (from MuJoCo Menagerie) mounted at the origin, a table (surface at $z=0.40$\,m),
 a red basket (20\,cm $\times$ 20\,cm open-top container made of five box geoms),
-a fixed blue obstacle cube, and a yellow multi-geom target object
-(three geoms: a box body, a box top piece, and a cylindrical bump). An overhead
-RGB-D camera is mounted 1.0\,m above the table center, rendering
-$640 \times 480$ images with a $60^\circ$ vertical field of view.
+and a fixed blue obstacle cube. Three YCB mesh objects serve as manipulation
+targets: the 003 cracker box, 006 mustard bottle, and 004 sugar box. Each
+object is loaded from a 16,384-triangle STL mesh obtained from the YCB Object
+and Model Set. The meshes are scaled to 0.5$\times$ to match the Panda
+gripper's 8\,cm maximum opening. Each object body contains two geoms: a
+high-resolution visual mesh and a box-primitive collision geom, following
+standard practice in MuJoCo simulation.
 
-Object and basket positions are randomized each episode within the robot's
-reachable workspace. The obstacle remains at a fixed known location.
+An overhead RGB-D camera is mounted 1.0\,m above the table center, rendering
+$640 \times 480$ images with a $60^\circ$ vertical field of view. Object and
+basket positions are randomized each episode within the robot's reachable
+workspace. Only one object is placed on the table per episode; the other two
+are moved off-screen. The obstacle remains at a fixed known location.
 
 \subsection{Pipeline Overview}
 
@@ -100,10 +110,12 @@ Our decision-making pipeline has four stages, shown in Figure~\ref{fig:pipeline}
 
 \paragraph{HSV color segmentation.}
 The overhead camera captures an RGB image, which we convert to HSV color space
-using \texttt{cv2.cvtColor}. We threshold on hue, saturation, and value using
-\texttt{cv2.inRange} to produce binary masks for the yellow object and the red
-basket. Morphological erosion and dilation clean up noise. In simulation, colors
-are consistent, so the HSV ranges need only be tuned once per object type.
+using \texttt{cv2.cvtColor}. Each YCB object is assigned a distinct color in
+the scene: yellow for the cracker box, green for the mustard bottle, and cyan
+for the sugar box. We threshold on hue, saturation, and value using
+\texttt{cv2.inRange} with per-object HSV ranges to produce binary masks.
+Morphological erosion and dilation clean up noise. The red basket uses a
+dual-range threshold since red wraps around in HSV (hue 0--10 and 170--180).
 
 \paragraph{Depth back-projection.}
 For each masked pixel $(u,v)$ with depth $d$ from the depth image, we compute
@@ -119,22 +131,26 @@ sign conventions account for MuJoCo's camera axes ($-z$ points into the scene,
 $y$ points up). We then transform to world coordinates using the camera
 extrinsics: $\mathbf{p}_{world} = R \cdot \mathbf{p}_{cam} + \mathbf{t}$,
 where $R$ and $\mathbf{t}$ come from \texttt{data.cam\_xmat} and
-\texttt{data.cam\_xpos}.
+\texttt{data.cam\_xpos}. This coordinate transform follows the same structure
+as HW1.
 
 The object position is estimated as the centroid (mean) of the resulting point
-cloud. If the object is occluded by the robot arm, we move the arm to a safe
-configuration and retry perception.
+cloud. If the object is occluded by the robot arm in the initial image, we
+move the arm to a safe configuration and retry perception. We also generate
+pre-computed model point clouds (1,000 points each, sampled via
+\texttt{trimesh.sample.sample\_surface}) for potential ICP-based pose
+refinement, following our HW4 implementation.
 
 \subsection{Stage 2: Grasp Planning}
 
 We compute seven Cartesian waypoints for a top-down antipodal grasp:
 
 \begin{enumerate}[nosep]
-\item \textbf{Approach high:} Hand at $(0.4, 0.0, 0.65)$, gripper open. Clears the workspace to avoid sweeping through objects.
+\item \textbf{Approach high:} Hand at $(0.4, 0.0, 0.65)$, gripper open. Clears the workspace to avoid sweeping through objects during the initial approach.
 \item \textbf{Pre-grasp:} 12\,cm above the perceived object position, gripper open.
 \item \textbf{Grasp:} Lower to the object. The hand body is positioned so that the fingertip pads align with the upper portion of the object.
 \item \textbf{Close gripper:} Same position, close the fingers gradually.
-\item \textbf{Lift:} Raise 18\,cm vertically with the object.
+\item \textbf{Lift:} Raise 18\,cm vertically while maintaining grip.
 \item \textbf{Above bin:} Move laterally to 18\,cm above the basket center.
 \item \textbf{Release:} Lower 6\,cm into the basket and open the fingers.
 \end{enumerate}
@@ -142,7 +158,9 @@ We compute seven Cartesian waypoints for a top-down antipodal grasp:
 A critical design decision was the \textbf{hand-to-fingertip offset}: the
 ``hand'' body in the Menagerie Panda model is 58\,mm above the fingertip
 contact pads. All grasp heights are computed with this offset so that the
-pads, not the wrist, align with the object.
+pads, not the wrist, align with the object. Each YCB object is laid flat on
+the table with a specific orientation quaternion chosen so that the narrowest
+dimension faces the gripper's squeeze direction.
 
 \subsection{Stage 3: Inverse Kinematics}
 
@@ -176,7 +194,8 @@ cosine easing for smooth acceleration and deceleration.
 \paragraph{Combined descent and close.}
 The most critical controller behavior is the grasp sequence. We found that
 executing descent and gripper close as separate steps caused the open fingers
-to push the object during the slow descent. Our solution combines them:
+to push the object during the slow descent. Our solution combines them into
+a single synchronized motion:
 (1) rapid descent to the grasp position (600 steps), (2) settle with open
 fingers (300 steps), (3) gradually ramp closing force from 0 to 100\,N over
 400 steps, then hold at 100\,N for 800 more steps. During transport (lift and
@@ -187,53 +206,68 @@ move to basket), we maintain 100\,N closing force on both finger joints.
 
 \subsection{Success Rate}
 
-We evaluated the system across 90 randomized episodes (30 episodes $\times$ 3
-random seeds). Table~\ref{tab:results} summarizes the results.
+We evaluated the system across 150 randomized episodes (50 per object) using
+camera-based perception. Table~\ref{tab:results} summarizes the per-object
+results.
 
 \begin{table}[h]
 \centering
 \begin{tabular}{lccc}
 \toprule
-Seed & Episodes & Successes & Rate \\
+Object & Episodes & Successes & Rate \\
 \midrule
-99  & 30 & 26 & 86.7\% \\
-7   & 30 & 25 & 83.3\% \\
-256 & 30 & 23 & 76.7\% \\
+Cracker box (yellow)   & 50 & 29 & 58.0\% \\
+Mustard bottle (green) & 50 & 45 & 90.0\% \\
+Sugar box (cyan)       & 50 & 34 & 68.0\% \\
 \midrule
-\textbf{Total} & \textbf{90} & \textbf{74} & \textbf{82.2\%} \\
+\textbf{Total} & \textbf{150} & \textbf{108} & \textbf{72.0\%} \\
 \bottomrule
 \end{tabular}
-\caption{Success rates across three evaluation seeds.}
+\caption{Per-object success rates across 150 randomized episodes.}
 \label{tab:results}
 \end{table}
 
+The mustard bottle achieves the highest success rate (90\%) because its 3.3\,cm
+squeeze dimension provides the most clearance within the Panda's 8\,cm gripper
+opening. The cracker box is the most challenging (58\%) because its 8.2\,cm
+squeeze dimension barely fits the gripper, leaving almost no margin for
+perception error.
+
 \subsection{Perception Accuracy}
 
-The perception system achieves a mean localization error of 50\,mm, dominated
-by the Z-axis component (approximately 30\,mm). The XY error is only 3--5\,mm.
-The Z bias arises because the overhead camera sees only the top surface of the
-object, so the centroid of visible points is higher than the true object center.
-The grasp planner compensates for this known bias by targeting the fingertips
-15\,mm below the perceived surface height.
+The perception system achieves a mean localization error of 26.6\,mm across
+all objects. The error is dominated by the Z-axis component (approximately
+20\,mm) because the overhead camera sees only the top surface of each object.
+The XY error is typically 3--10\,mm. The grasp planner compensates for the
+known Z bias by targeting the fingertips 5\,mm below the perceived surface.
 
 \subsection{Failure Analysis}
 
-Of the 16 failures across 90 episodes, the primary causes were:
+Of the 42 failures across 150 episodes, all were classified as ``MISSED''---the
+gripper closed without successfully gripping the object. The primary causes
+were:
+
 \begin{itemize}[nosep]
-\item \textbf{Grasp slip (11 failures):} The object escaped the gripper during
-the close phase, typically when perception error exceeded 80\,mm, placing the
-fingertip pads too high on the object for a stable grip.
-\item \textbf{IK failure (3 failures):} The target pose was near the workspace
-boundary and IK could not converge, even with alternative starting configurations.
-\item \textbf{Perception miss (2 failures):} Very few pixels detected (fewer than 20), leading to high centroid error and subsequent grasp misalignment.
+\item \textbf{Perception offset (estimated 25 failures):} When perception error
+exceeded 50\,mm, the gripper descended to the wrong location and the fingertip
+pads could not contact the object's sides. This was most common for the cracker
+box, whose large flat surface produced noisier centroid estimates.
+\item \textbf{Marginal gripper clearance (estimated 12 failures):} The cracker
+box's 8.2\,cm width nearly matches the gripper's 8\,cm maximum opening. Even
+small misalignments caused the fingers to slide off the object rather than grip.
+\item \textbf{Object slippage (estimated 5 failures):} The sugar box, being
+the flattest object (2.5\,cm height), occasionally slipped from the gripper
+during the lift phase due to limited contact area between the finger pads
+and the object surface.
 \end{itemize}
 
 \subsection{Execution Metrics}
 
-Mean execution time was 2.9\,s of wall-clock time per episode. For successful
+Mean execution time was 0.8\,s of wall-clock time per episode. For successful
 grasps, the mean XY distance between the released object and the basket center
-was 12\,mm (well within the 100\,mm basket radius). The object was reliably
-lifted 120--180\,mm during the lift phase, confirming physics-based grasping.
+was 88.3\,mm (within the 100\,mm basket radius). The object was reliably
+lifted 120--180\,mm during the lift phase, confirming physics-based grasping
+through MuJoCo's contact model.
 
 % ============================================================
 \section{References}

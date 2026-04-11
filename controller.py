@@ -291,7 +291,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
     return results
 
 
-def check_success(model, data):
+def check_success(model, data, object_body_name="cracker_box"):
     """
     Check if the object is inside the basket.
 
@@ -302,7 +302,7 @@ def check_success(model, data):
         success: bool
         distance: Euclidean distance between object and basket centers (xy)
     """
-    obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "target_object")
+    obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, object_body_name)
     bsk_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "basket")
 
     obj_pos = data.xpos[obj_bid]
