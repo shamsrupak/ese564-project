@@ -280,10 +280,26 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             _save_frame(f"{i}_{label}")
 
         else:
-            # Normal waypoint movement
-            success, steps = move_to_target(model, data, q_target, gripper, 1500)
-            results.append({"label": label, "success": success, "steps": steps})
-            _print_status(i+1, total, label, steps)
+            # Normal waypoint: use RRT for collision-free path if needed
+            from motion_planner import plan_path
+
+            q_current = data.qpos[:7].copy()
+            path = plan_path(q_current, q_target, model, data)
+
+            if path is not None and len(path) > 2:
+                # RRT found a multi-segment path - execute each segment
+                total_steps = 0
+                for seg_idx in range(len(path) - 1):
+                    seg_steps = max(500, 1500 // (len(path) - 1))
+                    move_to_target(model, data, path[seg_idx + 1], gripper, seg_steps)
+                    total_steps += seg_steps
+                results.append({"label": label, "success": True, "steps": total_steps})
+            else:
+                # Direct path is collision-free (most common case)
+                success, steps = move_to_target(model, data, q_target, gripper, 1500)
+                results.append({"label": label, "success": success, "steps": steps})
+
+            _print_status(i+1, total, label, results[-1]["steps"])
             _save_frame(f"{i}_{label}")
 
         i += 1

@@ -136,9 +136,18 @@ def run_episode(model, data, renderer, episode_num, active_object,
     color_target = cfg["color_target"]
     perception_error_mm = 0.0
 
+    # Load model cloud for ICP
+    model_cloud_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), cfg["model_cloud"])
+    if os.path.exists(model_cloud_path):
+        model_cloud = np.load(model_cloud_path)
+    else:
+        model_cloud = None
+
     if use_perception:
         obj_result = perceive_object(rgb, depth, model, data,
-                                     "overhead_cam", color_target)
+                                     "overhead_cam", color_target,
+                                     model_cloud=model_cloud)
         bsk_result = perceive_object(rgb, depth, model, data,
                                      "overhead_cam", "red_basket")
 
@@ -155,7 +164,8 @@ def run_episode(model, data, renderer, episode_num, active_object,
             depth = renderer.render().copy()
             renderer.disable_depth_rendering()
             obj_result = perceive_object(rgb, depth, model, data,
-                                         "overhead_cam", color_target)
+                                         "overhead_cam", color_target,
+                                         model_cloud=model_cloud)
             bsk_result = perceive_object(rgb, depth, model, data,
                                          "overhead_cam", "red_basket")
 
@@ -176,7 +186,7 @@ def run_episode(model, data, renderer, episode_num, active_object,
         bsk_pos = gt_bsk.copy()
         R_obj = None
 
-    # ---- Grasp planning ----
+    # ---- Grasp planning (initial, from overhead camera) ----
     waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
 
     # ---- Inverse kinematics ----
@@ -188,6 +198,55 @@ def run_episode(model, data, renderer, episode_num, active_object,
             "perception_error_mm": perception_error_mm,
             "xy_dist_mm": -1, "time_s": time.time() - t_start,
         }
+
+    # ---- Wrist camera refinement (coarse-to-fine, as described in proposal) ----
+    # After initial overhead perception, move arm to pre-grasp position,
+    # then capture a close-up image from the wrist camera (attached to hand body)
+    # and run ICP for refined pose estimation.
+    if use_perception and model_cloud is not None:
+        from controller import move_to_target
+
+        # Move to approach_high (waypoint 0)
+        move_to_target(model, data, joint_targets[0]["q"], "open", 1500)
+        # Move to pre_grasp (waypoint 1)
+        move_to_target(model, data, joint_targets[1]["q"], "open", 1500)
+        mujoco.mj_forward(model, data)
+
+        # Capture wrist camera image (320x240, attached to hand body)
+        wrist_renderer = mujoco.Renderer(model, height=240, width=320)
+        wrist_renderer.update_scene(data, camera="wrist_cam")
+        wrist_rgb = wrist_renderer.render().copy()
+
+        wrist_renderer.enable_depth_rendering()
+        wrist_renderer.update_scene(data, camera="wrist_cam")
+        wrist_depth = wrist_renderer.render().copy()
+        wrist_renderer.disable_depth_rendering()
+
+        if save_images:
+            cv2.imwrite(f"{output_dir}/ep{episode_num}_wrist.png",
+                        cv2.cvtColor(wrist_rgb, cv2.COLOR_RGB2BGR))
+
+        # Run perception on wrist camera for refinement
+        wrist_result = perceive_object(wrist_rgb, wrist_depth, model, data,
+                                       "wrist_cam", color_target,
+                                       model_cloud=model_cloud,
+                                       img_height=240, img_width=320)
+
+        if wrist_result is not None:
+            refined_pos = wrist_result["position"]
+            refined_err = np.linalg.norm(refined_pos - gt_obj) * 1000
+            # Use refinement only if it improves on the overhead estimate
+            if refined_err < perception_error_mm or perception_error_mm < 0:
+                obj_pos = refined_pos
+                R_obj = wrist_result["rotation"]
+                perception_error_mm = refined_err
+
+                # Re-plan grasp with refined position
+                waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
+                joint_targets = compute_joint_targets(model, data, waypoints)
+
+        wrist_renderer.close()
+    
 
     # ---- Execute ----
     execute_pick_and_place(

@@ -391,7 +391,8 @@ def icp(scene_points, model_points, R_init, t_init, max_iters=50):
 
 def perceive_object(rgb_image, depth_meters, model, data,
                     camera_name, color_target, model_cloud=None,
-                    img_height=480, img_width=640):
+                    img_height=480, img_width=640,
+                    cam_pos=None, cam_rot=None):
     """
     Full perception pipeline: from raw images to 6-DOF pose.
 
@@ -407,11 +408,13 @@ def perceive_object(rgb_image, depth_meters, model, data,
         depth_meters: (H, W) depth in meters
         model: MuJoCo model
         data: MuJoCo data
-        camera_name: which camera to use ("overhead_cam")
+        camera_name: which camera to use ("overhead_cam"), or -1 for free cam
         color_target: HSV target name ("yellow_object" or "red_basket")
         model_cloud: (M, 3) reference point cloud for ICP (None to skip ICP)
         img_height: image height
         img_width: image width
+        cam_pos: (3,) camera position for free camera (optional)
+        cam_rot: (3,3) camera rotation for free camera (optional)
 
     Returns:
         result: dict with keys:
@@ -429,11 +432,24 @@ def perceive_object(rgb_image, depth_meters, model, data,
         return None  # object not visible
 
     # Step 2: Get camera parameters
-    K, cam_id = get_camera_intrinsics(model, camera_name, img_height, img_width)
-    cam_pos, cam_rot = get_camera_extrinsics(data, cam_id)
+    if cam_pos is not None and cam_rot is not None:
+        # Wrist camera: use provided parameters
+        # Compute intrinsics assuming 60 degree fovy
+        fovy = 60.0
+        fy = (img_height / 2.0) / np.tan(np.radians(fovy / 2.0))
+        fx = fy
+        cx = img_width / 2.0
+        cy = img_height / 2.0
+        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+        camera_pos = cam_pos
+        camera_rot = cam_rot
+    else:
+        # Named camera: look up from model
+        K, cam_id = get_camera_intrinsics(model, camera_name, img_height, img_width)
+        camera_pos, camera_rot = get_camera_extrinsics(data, cam_id)
 
     # Step 3: Back-project to 3D
-    points = backproject_to_pointcloud(depth_meters, mask, K, cam_pos, cam_rot)
+    points = backproject_to_pointcloud(depth_meters, mask, K, camera_pos, camera_rot)
 
     if points is None or len(points) < 10:
         return None
