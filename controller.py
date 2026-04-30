@@ -249,8 +249,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
     def _print_status(step_num, total, label, steps):
         mujoco.mj_forward(model, data)
         ee = data.xpos[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "hand")]
-        obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "target_object")
-        obj_z = data.xpos[obj_bid][2]
+        obj_z = data.xpos[obj_bid][2] if obj_bid >= 0 else float("nan")
         fq = data.qpos[7:9]
         print(f"  [{step_num}/{total}] {label:20s} OK  steps={steps:5d}  "
               f"ee=[{ee[0]:.3f},{ee[1]:.3f},{ee[2]:.3f}] "

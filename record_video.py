@@ -5,8 +5,10 @@ Saves individual frames that can be compiled into a video with ffmpeg:
   ffmpeg -framerate 30 -i frames/ep%d_frame_%04d.png -c:v libx264 -pix_fmt yuv420p video.mp4
 
 Usage:
-    MUJOCO_GL=egl python record_video.py
+    python record_video.py
+    python record_video.py --object sugar_box
 """
+import argparse
 import mujoco
 import numpy as np
 import cv2
@@ -21,7 +23,32 @@ from controller import set_gripper
 from evaluation import YCB_OBJECTS, randomize_scene
 
 SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
-ACTIVE_OBJECT = "cracker_box"
+
+
+def choose_active_object():
+    parser = argparse.ArgumentParser(description="Record pick-and-place video frames.")
+    parser.add_argument("--object", choices=list(YCB_OBJECTS.keys()), default=None,
+                        help="Object to record: cracker_box, mustard_bottle, or sugar_box")
+    args = parser.parse_args()
+
+    if args.object:
+        return args.object
+
+    object_names = list(YCB_OBJECTS.keys())
+    print("Choose object to record:")
+    for i, name in enumerate(object_names, start=1):
+        print(f"  {i}. {name}")
+
+    while True:
+        choice = input("Object [1-3]: ").strip()
+        if choice in {"1", "2", "3"}:
+            return object_names[int(choice) - 1]
+        if choice in YCB_OBJECTS:
+            return choice
+        print("Please enter 1, 2, 3, or an object name.")
+
+
+ACTIVE_OBJECT = choose_active_object()
 OBJ_CFG = YCB_OBJECTS[ACTIVE_OBJECT]
 
 FRAME_DIR = "output/frames"
@@ -205,7 +232,7 @@ def run_and_record(ep_num):
 
 
 # Run until we have 5 successful episodes
-print("Recording 5 successful episodes...")
+print(f"Recording 5 successful {ACTIVE_OBJECT} episodes...")
 success_count = 0
 ep = 0
 while success_count < 5 and ep < 15:

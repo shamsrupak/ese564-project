@@ -54,7 +54,9 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
                             pre_grasp_height=0.12,
                             lift_height=0.18,
                             above_bin_height=0.18,
-                            release_height=0.06):
+                            release_height=0.06,
+                            wall_y=-0.10,
+                            wall_clearance_z=0.72):
     """
     Compute the 6 Cartesian waypoints for pick-and-place.
 
@@ -70,6 +72,8 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
         lift_height: meters to lift after grasping
         above_bin_height: meters above basket for transport
         release_height: meters above basket floor for release
+        wall_y: y-position of the blue wall that separates pick and place zones
+        wall_clearance_z: hand height used while crossing above the wall
 
     Returns:
         waypoints: list of dicts, each with:
@@ -96,6 +100,10 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
 
     # Hand position = fingertip position + offset
     hand_grasp_z = fingertip_grasp_z + HAND_TO_FINGERTIP
+    lift_z = hand_grasp_z + lift_height
+    above_bin_z = basket_position[2] + HAND_TO_FINGERTIP + above_bin_height
+    wall_cross_z = max(wall_clearance_z, lift_z, above_bin_z)
+    wall_cross_x = 0.5 * (obj_position[0] + basket_position[0])
 
     waypoints = [
         {
@@ -128,24 +136,31 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
         },
         {
             "position": np.array([obj_position[0], obj_position[1],
-                                  hand_grasp_z + lift_height]),
+                                  lift_z]),
             "orientation": R_grip,
             "gripper": "close",
             "label": "4_lift",
         },
         {
-            "position": np.array([basket_position[0], basket_position[1],
-                                  basket_position[2] + HAND_TO_FINGERTIP + above_bin_height]),
+            # Rise and cross above the blue wall before moving to the basket.
+            "position": np.array([wall_cross_x, wall_y, wall_cross_z]),
             "orientation": R_grip,
             "gripper": "close",
-            "label": "5_above_bin",
+            "label": "5_clear_wall",
+        },
+        {
+            "position": np.array([basket_position[0], basket_position[1],
+                                  above_bin_z]),
+            "orientation": R_grip,
+            "gripper": "close",
+            "label": "6_above_bin",
         },
         {
             "position": np.array([basket_position[0], basket_position[1],
                                   basket_position[2] + HAND_TO_FINGERTIP + release_height]),
             "orientation": R_grip,
             "gripper": "open",
-            "label": "6_release",
+            "label": "7_release",
         },
     ]
 

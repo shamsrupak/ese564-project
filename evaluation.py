@@ -30,7 +30,7 @@ from controller import execute_pick_and_place, check_success
 SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
 
 OBJ_X_RANGE = (0.40, 0.60)
-OBJ_Y_RANGE = (-0.10, 0.15)
+OBJ_Y_RANGE = (0.00, 0.15)
 BASKET_X_RANGE = (0.40, 0.60)
 BASKET_Y_RANGE = (-0.30, -0.15)
 IMG_H, IMG_W = 480, 640
