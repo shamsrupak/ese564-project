@@ -9,15 +9,15 @@ perception and model-based planning (Jacobian IK + PD control) for manipulation.
 
 ### Setup
 
-```bash
-# 1. Install dependencies
-pip install mujoco numpy opencv-python-headless trimesh scipy
+​```bash
+chmod +x setup.sh
+./setup.sh
+​```
 
-# 2. Clone MuJoCo Menagerie (for the Panda robot model)
-git clone --depth 1 https://github.com/google-deepmind/mujoco_menagerie.git
-
-# 3. Create output directory
-mkdir -p output
+`setup.sh` installs Python dependencies, clones MuJoCo Menagerie, injects
+the wrist camera into `panda.xml` (used for ICP refinement during the
+approach phase), and creates the `output/` directory. It is idempotent —
+safe to re-run.
 ```
 
 ### Running the Evaluation
