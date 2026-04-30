@@ -7,10 +7,13 @@ dist/
 build/
 
 # MuJoCo Menagerie (cloned separately, not tracked in git)
-mujoco_menagerie/
+mujoco_menagerie/*
+!mujoco_menagerie/franka_emika_panda/panda.xml
+MUJOCO_LOG.txt
 
 # Output files (generated at runtime)
 output/
+*.mp4
 
 # OS files
 .DS_Store

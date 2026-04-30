@@ -41,10 +41,8 @@ def compute_grasp_orientation(R_obj=None):
     gz = np.array([0.0, 0.0, -1.0])
 
     # The Panda gripper fingers open/close along the LOCAL y-axis of the
-    # hand body. We want them to squeeze across the object's narrow side.
-    # For our upright objects, squeezing along world-Y works well since
-    # object Y-extent (4cm) < gripper max opening (8cm).
-    # Gripper x-axis = world x-axis -> fingers squeeze along world y-axis
+    # hand body. The original world-Y squeeze is empirically the most stable
+    # for this scene's mesh/collision setup.
     gx = np.array([1.0, 0.0, 0.0])
     gy = np.cross(gz, gx)
 
@@ -56,7 +54,11 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
                             pre_grasp_height=0.12,
                             lift_height=0.18,
                             above_bin_height=0.18,
-                            release_height=0.06):
+                            release_height=0.06,
+                            wall_y=-0.10,
+                            wall_clearance_z=0.72,
+                            object_name=None,
+                            grasp_width=None):
     """
     Compute the 6 Cartesian waypoints for pick-and-place.
 
@@ -72,6 +74,10 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
         lift_height: meters to lift after grasping
         above_bin_height: meters above basket for transport
         release_height: meters above basket floor for release
+        wall_y: y-position of the blue wall that separates pick and place zones
+        wall_clearance_z: hand height used while crossing above the wall
+        object_name: optional YCB object key for object-specific grasp depth
+        grasp_width: estimated total finger gap needed to hold the object
 
     Returns:
         waypoints: list of dicts, each with:
@@ -86,18 +92,33 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     # The hand body is 0.058m above where the fingertips actually grasp
     HAND_TO_FINGERTIP = 0.058
 
-    # We want the fingertips at the object center height
-    # Object surface (from perception) is approximately at obj_position[2]
-    # The actual center is below the surface
-    # Account for ~15mm controller tracking error by targeting deeper
-    # Target fingertips at the UPPER portion of the object.
-    # Aiming too low causes the object to pop downward when squeezed.
-    # Aiming at the upper third gives reliable grip without slippage.
-    # perception gives surface height; object center is ~0.04 below surface
-    fingertip_grasp_z = obj_position[2] - 0.005
+    # Keep box grasps near the outside top edges. The mustard bottle tolerates
+    # the original deeper target, but the box meshes let the gripper visibly
+    # sink into the object if we use the same depth.
+    grasp_z_offsets = {
+        "cracker_box": 0.025,
+        "sugar_box": 0.018,
+        "mustard_bottle": -0.005,
+    }
+    fingertip_grasp_z = obj_position[2] + grasp_z_offsets.get(object_name, -0.005)
 
     # Hand position = fingertip position + offset
     hand_grasp_z = fingertip_grasp_z + HAND_TO_FINGERTIP
+    lift_z = hand_grasp_z + lift_height
+    above_bin_z = basket_position[2] + HAND_TO_FINGERTIP + above_bin_height
+    wall_cross_z = max(wall_clearance_z, lift_z, above_bin_z)
+    wall_cross_x = 0.5 * (obj_position[0] + basket_position[0])
+
+    default_widths = {
+        "cracker_box": 0.082,
+        "mustard_bottle": 0.034,
+        "sugar_box": 0.047,
+    }
+    if grasp_width is None:
+        grasp_width = default_widths.get(object_name, 0.045)
+    grasp_width = float(np.clip(grasp_width, 0.015, 0.078))
+    approach_width = float(np.clip(grasp_width + 0.015, 0.025, 0.080))
+    hold_width = grasp_width
 
     waypoints = [
         {
@@ -105,6 +126,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
             "position": np.array([0.4, 0.0, 0.65]),
             "orientation": R_grip,
             "gripper": "open",
+            "gripper_width": approach_width,
             "label": "0_approach_high",
         },
         {
@@ -112,6 +134,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
                                   hand_grasp_z + pre_grasp_height]),
             "orientation": R_grip,
             "gripper": "open",
+            "gripper_width": approach_width,
             "label": "1_pre_grasp",
         },
         {
@@ -119,6 +142,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
                                   hand_grasp_z]),
             "orientation": R_grip,
             "gripper": "open",
+            "gripper_width": approach_width,
             "label": "2_grasp",
         },
         {
@@ -126,28 +150,40 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
                                   hand_grasp_z]),
             "orientation": R_grip,
             "gripper": "close",
+            "gripper_width": hold_width,
             "label": "3_close_gripper",
         },
         {
             "position": np.array([obj_position[0], obj_position[1],
-                                  hand_grasp_z + lift_height]),
+                                  lift_z]),
             "orientation": R_grip,
             "gripper": "close",
+            "gripper_width": hold_width,
             "label": "4_lift",
         },
         {
-            "position": np.array([basket_position[0], basket_position[1],
-                                  basket_position[2] + HAND_TO_FINGERTIP + above_bin_height]),
+            # Rise and cross above the blue wall before moving to the basket.
+            "position": np.array([wall_cross_x, wall_y, wall_cross_z]),
             "orientation": R_grip,
             "gripper": "close",
-            "label": "5_above_bin",
+            "gripper_width": hold_width,
+            "label": "5_clear_wall",
+        },
+        {
+            "position": np.array([basket_position[0], basket_position[1],
+                                  above_bin_z]),
+            "orientation": R_grip,
+            "gripper": "close",
+            "gripper_width": hold_width,
+            "label": "6_above_bin",
         },
         {
             "position": np.array([basket_position[0], basket_position[1],
                                   basket_position[2] + HAND_TO_FINGERTIP + release_height]),
             "orientation": R_grip,
             "gripper": "open",
-            "label": "6_release",
+            "gripper_width": approach_width,
+            "label": "7_release",
         },
     ]
 
@@ -403,6 +439,7 @@ def compute_joint_targets(model, data, waypoints):
         joint_targets.append({
             "q": q_result,
             "gripper": wp["gripper"],
+            "gripper_width": wp.get("gripper_width"),
             "label": wp["label"],
             "ik_success": success,
             "ik_error_mm": pos_error * 1000,

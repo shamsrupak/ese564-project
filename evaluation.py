@@ -4,6 +4,12 @@ evaluation.py - Main evaluation script for the pick-and-place project.
 Runs the full pipeline on 3 YCB mesh objects (cracker box, mustard bottle,
 sugar box) with 50 randomized episodes per object = 150 total.
 
+Features:
+  - ICP pose estimation with pre-computed model point clouds (HW4)
+  - Wrist camera for coarse-to-fine pose refinement
+  - Per-object grasp width estimation (Sowmya)
+  - Inactive objects parked visibly on the table (Sowmya)
+
 Usage:
     python evaluation.py                         # full evaluation (150 episodes)
     python evaluation.py --num_episodes 5        # quick test (5 per object)
@@ -27,11 +33,10 @@ from controller import execute_pick_and_place, check_success
 # ================================================================
 # CONFIGURATION
 # ================================================================
-SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-    "mujoco_menagerie", "franka_emika_panda", "pick_and_place_scene.xml")
+SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
 
 OBJ_X_RANGE = (0.40, 0.60)
-OBJ_Y_RANGE = (-0.10, 0.15)
+OBJ_Y_RANGE = (0.00, 0.15)
 BASKET_X_RANGE = (0.40, 0.60)
 BASKET_Y_RANGE = (-0.30, -0.15)
 IMG_H, IMG_W = 480, 640
@@ -50,7 +55,7 @@ YCB_OBJECTS = {
         "body": "mustard_bottle",
         "joint": "mustard_bottle_freejoint",
         "color_target": "green_object",
-        "quat": [0.7071, 0, 0.7071, 0],    # 90° Y: 4.9cm height, 3.3cm squeeze
+        "quat": [0.7071, 0, 0.7071, 0],
         "flat_half_height": 0.025,
         "model_cloud": "objects/mustard_bottle_model_cloud.npy",
     },
@@ -64,20 +69,30 @@ YCB_OBJECTS = {
     },
 }
 
-ALL_JOINTS = [c["joint"] for c in YCB_OBJECTS.values()]
+# Park inactive objects visibly on the back of the table (Sowmya)
+INACTIVE_OBJECT_POSITIONS = {
+    "cracker_box": (0.42, 0.30),
+    "mustard_bottle": (0.50, 0.30),
+    "sugar_box": (0.58, 0.30),
+}
 
 
 def randomize_scene(model, data, rng, active_object):
-    """Place one YCB object on the table, move others off-screen."""
+    """Place the active object randomly and park inactive objects on the table."""
     cfg = YCB_OBJECTS[active_object]
 
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
 
-    # Move ALL objects far away
-    for jn in ALL_JOINTS:
-        jid = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-        data.qpos[jid:jid+7] = [0, 0, 10, 1, 0, 0, 0]
+    # Park inactive objects on the back of the table (Sowmya)
+    for name, obj_cfg in YCB_OBJECTS.items():
+        if name == active_object:
+            continue
+        park_x, park_y = INACTIVE_OBJECT_POSITIONS[name]
+        park_z = 0.40 + obj_cfg["flat_half_height"] + 0.01
+        jid = model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, obj_cfg["joint"])]
+        data.qpos[jid:jid+7] = [park_x, park_y, park_z, *obj_cfg["quat"]]
 
     # Place active object on table, lying flat
     obj_x = rng.uniform(*OBJ_X_RANGE)
@@ -132,18 +147,15 @@ def run_episode(model, data, renderer, episode_num, active_object,
         cv2.imwrite(f"{output_dir}/ep{episode_num}_overhead.png",
                     cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
 
-    # ---- Perception ----
+    # ---- Load ICP model cloud (HW4) ----
     color_target = cfg["color_target"]
     perception_error_mm = 0.0
 
-    # Load model cloud for ICP
     model_cloud_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), cfg["model_cloud"])
-    if os.path.exists(model_cloud_path):
-        model_cloud = np.load(model_cloud_path)
-    else:
-        model_cloud = None
+    model_cloud = np.load(model_cloud_path) if os.path.exists(model_cloud_path) else None
 
+    # ---- Perception ----
     if use_perception:
         obj_result = perceive_object(rgb, depth, model, data,
                                      "overhead_cam", color_target,
@@ -172,11 +184,13 @@ def run_episode(model, data, renderer, episode_num, active_object,
         if obj_result is not None:
             obj_pos = obj_result["position"]
             R_obj = obj_result["rotation"]
+            grasp_width = obj_result.get("grasp_width")
             perception_error_mm = np.linalg.norm(obj_pos - gt_obj) * 1000
         else:
             obj_pos = gt_obj.copy()
             obj_pos[2] += cfg["flat_half_height"]
             R_obj = None
+            grasp_width = None
             perception_error_mm = -1
 
         bsk_pos = bsk_result["position"] if bsk_result else gt_bsk.copy()
@@ -185,9 +199,12 @@ def run_episode(model, data, renderer, episode_num, active_object,
         obj_pos[2] += cfg["flat_half_height"]
         bsk_pos = gt_bsk.copy()
         R_obj = None
+        grasp_width = None
 
     # ---- Grasp planning (initial, from overhead camera) ----
-    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
+    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
+                                        object_name=active_object,
+                                        grasp_width=grasp_width)
 
     # ---- Inverse kinematics ----
     joint_targets = compute_joint_targets(model, data, waypoints)
@@ -213,46 +230,51 @@ def run_episode(model, data, renderer, episode_num, active_object,
         mujoco.mj_forward(model, data)
 
         # Capture wrist camera image (320x240, attached to hand body)
-        wrist_renderer = mujoco.Renderer(model, height=240, width=320)
-        wrist_renderer.update_scene(data, camera="wrist_cam")
-        wrist_rgb = wrist_renderer.render().copy()
+        try:
+            wrist_renderer = mujoco.Renderer(model, height=240, width=320)
+            wrist_renderer.update_scene(data, camera="wrist_cam")
+            wrist_rgb = wrist_renderer.render().copy()
 
-        wrist_renderer.enable_depth_rendering()
-        wrist_renderer.update_scene(data, camera="wrist_cam")
-        wrist_depth = wrist_renderer.render().copy()
-        wrist_renderer.disable_depth_rendering()
+            wrist_renderer.enable_depth_rendering()
+            wrist_renderer.update_scene(data, camera="wrist_cam")
+            wrist_depth = wrist_renderer.render().copy()
+            wrist_renderer.disable_depth_rendering()
 
-        if save_images:
-            cv2.imwrite(f"{output_dir}/ep{episode_num}_wrist.png",
-                        cv2.cvtColor(wrist_rgb, cv2.COLOR_RGB2BGR))
+            if save_images:
+                cv2.imwrite(f"{output_dir}/ep{episode_num}_wrist.png",
+                            cv2.cvtColor(wrist_rgb, cv2.COLOR_RGB2BGR))
 
-        # Run perception on wrist camera for refinement
-        wrist_result = perceive_object(wrist_rgb, wrist_depth, model, data,
-                                       "wrist_cam", color_target,
-                                       model_cloud=model_cloud,
-                                       img_height=240, img_width=320)
+            # Run perception on wrist camera for ICP refinement
+            wrist_result = perceive_object(wrist_rgb, wrist_depth, model, data,
+                                           "wrist_cam", color_target,
+                                           model_cloud=model_cloud,
+                                           img_height=240, img_width=320)
 
-        if wrist_result is not None:
-            refined_pos = wrist_result["position"]
-            refined_err = np.linalg.norm(refined_pos - gt_obj) * 1000
-            # Use refinement only if it improves on the overhead estimate
-            if refined_err < perception_error_mm or perception_error_mm < 0:
-                obj_pos = refined_pos
-                R_obj = wrist_result["rotation"]
-                perception_error_mm = refined_err
+            if wrist_result is not None:
+                refined_pos = wrist_result["position"]
+                refined_err = np.linalg.norm(refined_pos - gt_obj) * 1000
+                # Use refinement only if it improves on the overhead estimate
+                if refined_err < perception_error_mm or perception_error_mm < 0:
+                    obj_pos = refined_pos
+                    R_obj = wrist_result["rotation"]
+                    perception_error_mm = refined_err
 
-                # Re-plan grasp with refined position
-                waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
-                joint_targets = compute_joint_targets(model, data, waypoints)
+                    # Re-plan grasp with refined position
+                    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
+                                                        object_name=active_object,
+                                                        grasp_width=grasp_width)
+                    joint_targets = compute_joint_targets(model, data, waypoints)
 
-        wrist_renderer.close()
-    
+            wrist_renderer.close()
+        except Exception:
+            pass  # wrist camera not available, continue with overhead estimate
 
     # ---- Execute ----
     execute_pick_and_place(
         model, data, joint_targets,
         renderer=renderer if save_images else None,
-        save_frames=save_images, output_dir=output_dir)
+        save_frames=save_images, output_dir=output_dir,
+        object_body_name=cfg["body"])
 
     # ---- Check success ----
     mujoco.mj_forward(model, data)
@@ -293,7 +315,6 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
-    # Which objects to test
     if args.object:
         obj_list = [args.object]
     else:
@@ -307,10 +328,7 @@ def main():
     print(f"Objects:     {', '.join(obj_list)}")
     print(f"Episodes:    {args.num_episodes} per object = {total_episodes} total")
     print(f"Seed:        {args.seed}")
-    print(f"Perception:  {'Ground Truth' if args.use_gt else 'Camera (HSV + Depth)'}")
-
-    if 'MUJOCO_GL' not in os.environ:
-        os.environ['MUJOCO_GL'] = 'egl'
+    print(f"Perception:  {'Ground Truth' if args.use_gt else 'Camera (HSV + Depth + ICP)'}")
 
     model = mujoco.MjModel.from_xml_path(SCENE_PATH)
     data = mujoco.MjData(model)
@@ -353,7 +371,6 @@ def main():
                   f"Perception err: {result['perception_error_mm']:.0f}mm  "
                   f"Time: {result['time_s']:.1f}s")
 
-        # Per-object summary
         obj_successes = sum(1 for r in per_object_results[obj_name] if r["success"])
         obj_rate = obj_successes / args.num_episodes * 100
         print(f"\n  {obj_name}: {obj_successes}/{args.num_episodes} = {obj_rate:.1f}%")

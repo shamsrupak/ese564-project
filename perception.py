@@ -234,9 +234,19 @@ def backproject_to_pointcloud(depth_meters, mask, K, cam_pos, cam_rot):
     Z_cam = -depths
 
     points_cam = np.stack([X_cam, Y_cam, Z_cam], axis=1)  # (N, 3)
+    points_cam = points_cam[np.all(np.isfinite(points_cam), axis=1)]
+    points_cam = points_cam[np.all(np.abs(points_cam) < 10.0, axis=1)]
+
+    if len(points_cam) < 10:
+        return None
 
     # Transform to world coordinates: p_world = R @ p_cam + t
-    points_world = (cam_rot @ points_cam.T).T + cam_pos
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        points_world = (cam_rot @ points_cam.T).T + cam_pos
+    points_world = points_world[np.all(np.isfinite(points_world), axis=1)]
+
+    if len(points_world) < 10:
+        return None
 
     return points_world
 
@@ -256,6 +266,50 @@ def estimate_centroid(points):
         centroid: (3,) position estimate [x, y, z]
     """
     return np.mean(points, axis=0)
+
+
+def estimate_grasp_width(points, color_target, grasp_axis=None):
+    """
+    Estimate the object's tabletop width along the gripper closing direction.
+
+    The Panda fingers close along world Y for the top-down grasp used here, so
+    the default measurement is the point-cloud extent along Y. Percentiles make
+    the estimate less sensitive to a few noisy depth samples.
+    """
+    if color_target == "red_basket":
+        return None
+
+    if grasp_axis is None:
+        grasp_axis = np.array([0.0, 1.0, 0.0])
+
+    grasp_axis = grasp_axis / np.linalg.norm(grasp_axis)
+    projected = points @ grasp_axis
+    width = np.percentile(projected, 95) - np.percentile(projected, 5)
+    return float(np.clip(width, 0.015, 0.075))
+
+
+def filter_workspace_points(points, color_target):
+    """
+    Remove reconstructed points outside the tabletop workspace.
+
+    The macOS depth renderer can occasionally return unstable depth values.
+    Filtering in world coordinates prevents those rare samples from dominating
+    the centroid and sending IK to an unreachable phantom target.
+    """
+    if color_target == "red_basket":
+        bounds = ((0.35, 0.65), (-0.35, -0.10), (0.35, 0.55))
+    else:
+        bounds = ((0.35, 0.65), (-0.15, 0.20), (0.35, 0.55))
+
+    in_bounds = (
+        (points[:, 0] >= bounds[0][0]) & (points[:, 0] <= bounds[0][1]) &
+        (points[:, 1] >= bounds[1][0]) & (points[:, 1] <= bounds[1][1]) &
+        (points[:, 2] >= bounds[2][0]) & (points[:, 2] <= bounds[2][1])
+    )
+    points = points[in_bounds]
+    if len(points) < 10:
+        return None
+    return points
 
 
 # ================================================================
@@ -391,8 +445,7 @@ def icp(scene_points, model_points, R_init, t_init, max_iters=50):
 
 def perceive_object(rgb_image, depth_meters, model, data,
                     camera_name, color_target, model_cloud=None,
-                    img_height=480, img_width=640,
-                    cam_pos=None, cam_rot=None):
+                    img_height=480, img_width=640):
     """
     Full perception pipeline: from raw images to 6-DOF pose.
 
@@ -408,13 +461,11 @@ def perceive_object(rgb_image, depth_meters, model, data,
         depth_meters: (H, W) depth in meters
         model: MuJoCo model
         data: MuJoCo data
-        camera_name: which camera to use ("overhead_cam"), or -1 for free cam
+        camera_name: which camera to use ("overhead_cam")
         color_target: HSV target name ("yellow_object" or "red_basket")
         model_cloud: (M, 3) reference point cloud for ICP (None to skip ICP)
         img_height: image height
         img_width: image width
-        cam_pos: (3,) camera position for free camera (optional)
-        cam_rot: (3,3) camera rotation for free camera (optional)
 
     Returns:
         result: dict with keys:
@@ -432,30 +483,22 @@ def perceive_object(rgb_image, depth_meters, model, data,
         return None  # object not visible
 
     # Step 2: Get camera parameters
-    if cam_pos is not None and cam_rot is not None:
-        # Wrist camera: use provided parameters
-        # Compute intrinsics assuming 60 degree fovy
-        fovy = 60.0
-        fy = (img_height / 2.0) / np.tan(np.radians(fovy / 2.0))
-        fx = fy
-        cx = img_width / 2.0
-        cy = img_height / 2.0
-        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-        camera_pos = cam_pos
-        camera_rot = cam_rot
-    else:
-        # Named camera: look up from model
-        K, cam_id = get_camera_intrinsics(model, camera_name, img_height, img_width)
-        camera_pos, camera_rot = get_camera_extrinsics(data, cam_id)
+    K, cam_id = get_camera_intrinsics(model, camera_name, img_height, img_width)
+    cam_pos, cam_rot = get_camera_extrinsics(data, cam_id)
 
     # Step 3: Back-project to 3D
-    points = backproject_to_pointcloud(depth_meters, mask, K, camera_pos, camera_rot)
+    points = backproject_to_pointcloud(depth_meters, mask, K, cam_pos, cam_rot)
 
     if points is None or len(points) < 10:
         return None
 
+    points = filter_workspace_points(points, color_target)
+    if points is None:
+        return None
+
     # Step 4: Centroid
     centroid = estimate_centroid(points)
+    grasp_width = estimate_grasp_width(points, color_target)
 
     # Step 5: PCA
     R_pca, eigenvalues = estimate_orientation_pca(points)
@@ -481,6 +524,7 @@ def perceive_object(rgb_image, depth_meters, model, data,
         "rotation": R_final,
         "mask": mask,
         "point_cloud": points,
+        "grasp_width": grasp_width,
         "eigenvalues": eigenvalues,
         "icp_converged": icp_converged,
         "n_pixels": n_pixels,
