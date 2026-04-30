@@ -24,3 +24,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Final demo video is committed; other .mp4 files stay ignored
+!final_video.mp4
