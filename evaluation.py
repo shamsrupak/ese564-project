@@ -63,20 +63,30 @@ YCB_OBJECTS = {
     },
 }
 
-ALL_JOINTS = [c["joint"] for c in YCB_OBJECTS.values()]
+INACTIVE_OBJECT_POSITIONS = {
+    "cracker_box": (0.42, 0.30),
+    "mustard_bottle": (0.50, 0.30),
+    "sugar_box": (0.58, 0.30),
+}
 
 
 def randomize_scene(model, data, rng, active_object):
-    """Place one YCB object on the table, move others off-screen."""
+    """Place the active object randomly and park inactive objects on the table."""
     cfg = YCB_OBJECTS[active_object]
 
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
 
-    # Move ALL objects far away
-    for jn in ALL_JOINTS:
-        jid = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-        data.qpos[jid:jid+7] = [0, 0, 10, 1, 0, 0, 0]
+    # Park inactive objects on the back of the table so they stay visible
+    # without interfering with the active pick-and-place path.
+    for name, obj_cfg in YCB_OBJECTS.items():
+        if name == active_object:
+            continue
+        park_x, park_y = INACTIVE_OBJECT_POSITIONS[name]
+        park_z = 0.40 + obj_cfg["flat_half_height"] + 0.01
+        jid = model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, obj_cfg["joint"])]
+        data.qpos[jid:jid+7] = [park_x, park_y, park_z, *obj_cfg["quat"]]
 
     # Place active object on table, lying flat
     obj_x = rng.uniform(*OBJ_X_RANGE)
