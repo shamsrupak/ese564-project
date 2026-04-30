@@ -234,9 +234,19 @@ def backproject_to_pointcloud(depth_meters, mask, K, cam_pos, cam_rot):
     Z_cam = -depths
 
     points_cam = np.stack([X_cam, Y_cam, Z_cam], axis=1)  # (N, 3)
+    points_cam = points_cam[np.all(np.isfinite(points_cam), axis=1)]
+    points_cam = points_cam[np.all(np.abs(points_cam) < 10.0, axis=1)]
+
+    if len(points_cam) < 10:
+        return None
 
     # Transform to world coordinates: p_world = R @ p_cam + t
-    points_world = (cam_rot @ points_cam.T).T + cam_pos
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        points_world = (cam_rot @ points_cam.T).T + cam_pos
+    points_world = points_world[np.all(np.isfinite(points_world), axis=1)]
+
+    if len(points_world) < 10:
+        return None
 
     return points_world
 
@@ -256,6 +266,30 @@ def estimate_centroid(points):
         centroid: (3,) position estimate [x, y, z]
     """
     return np.mean(points, axis=0)
+
+
+def filter_workspace_points(points, color_target):
+    """
+    Remove reconstructed points outside the tabletop workspace.
+
+    The macOS depth renderer can occasionally return unstable depth values.
+    Filtering in world coordinates prevents those rare samples from dominating
+    the centroid and sending IK to an unreachable phantom target.
+    """
+    if color_target == "red_basket":
+        bounds = ((0.35, 0.65), (-0.35, -0.10), (0.35, 0.55))
+    else:
+        bounds = ((0.35, 0.65), (-0.15, 0.20), (0.35, 0.55))
+
+    in_bounds = (
+        (points[:, 0] >= bounds[0][0]) & (points[:, 0] <= bounds[0][1]) &
+        (points[:, 1] >= bounds[1][0]) & (points[:, 1] <= bounds[1][1]) &
+        (points[:, 2] >= bounds[2][0]) & (points[:, 2] <= bounds[2][1])
+    )
+    points = points[in_bounds]
+    if len(points) < 10:
+        return None
+    return points
 
 
 # ================================================================
@@ -436,6 +470,10 @@ def perceive_object(rgb_image, depth_meters, model, data,
     points = backproject_to_pointcloud(depth_meters, mask, K, cam_pos, cam_rot)
 
     if points is None or len(points) < 10:
+        return None
+
+    points = filter_workspace_points(points, color_target)
+    if points is None:
         return None
 
     # Step 4: Centroid

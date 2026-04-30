@@ -1,5 +1,8 @@
 <mujoco model="pick_and_place_scene">
-  <include file="panda.xml"/>
+  <include file="mujoco_menagerie/franka_emika_panda/panda.xml"/>
+  <!-- Override meshdir so panda.xml's bare filenames resolve from its assets folder.
+       Project mesh paths below use ../../../ to escape back to the repo root. -->
+  <compiler meshdir="mujoco_menagerie/franka_emika_panda/assets"/>
   <statistic center="0.4 0 0.4" extent="1"/>
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
@@ -11,9 +14,9 @@
     <texture type="2d" name="groundplane" builtin="checker" mark="edge"
       rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
-    <mesh name="cracker_box_visual" file="cracker_box_visual.stl"/>
-    <mesh name="mustard_bottle_visual" file="mustard_bottle_visual.stl"/>
-    <mesh name="sugar_box_visual" file="sugar_box_visual.stl"/>
+    <mesh name="cracker_box_visual" file="../../../objects/cracker_box_visual.stl"/>
+    <mesh name="mustard_bottle_visual" file="../../../objects/mustard_bottle_visual.stl"/>
+    <mesh name="sugar_box_visual" file="../../../objects/sugar_box_visual.stl"/>
   </asset>
   <worldbody>
     <light pos="0.5 0 1.5" dir="0 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>

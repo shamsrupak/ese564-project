@@ -114,7 +114,8 @@ def interpolate_joint_trajectory(q_start, q_end, num_steps):
 # ================================================================
 
 def move_to_target(model, data, q_target, gripper_state="open",
-                   duration_steps=1500, kp=None, kd=None):
+                   duration_steps=1500, kp=None, kd=None,
+                   grasp_stabilizer=None):
     """
     Move the robot to a target joint configuration.
 
@@ -171,6 +172,9 @@ def move_to_target(model, data, q_target, gripper_state="open",
             data.qfrc_applied[model.jnt_dofadr[fj1_id]] = 0.0
             data.qfrc_applied[model.jnt_dofadr[fj2_id]] = 0.0
 
+        if grasp_stabilizer is not None:
+            grasp_stabilizer(gripper_state)
+
         mujoco.mj_step(model, data)
 
     # Clear supplementary torques after motion
@@ -180,7 +184,8 @@ def move_to_target(model, data, q_target, gripper_state="open",
 
 
 def execute_pick_and_place(model, data, joint_targets, renderer=None,
-                           save_frames=False, output_dir="output"):
+                           save_frames=False, output_dir="output",
+                           object_body_name=None):
     """
     Execute the full pick-and-place sequence.
 
@@ -195,6 +200,43 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
     fj2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint2")
     extra_kp = np.array([3000, 3000, 3000, 3000, 1500, 1000, 500])
     extra_kd = np.array([100, 100, 100, 100, 50, 30, 15])
+    grasp_offset = {"value": None}
+
+    if object_body_name is not None:
+        obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, object_body_name)
+        obj_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT,
+                                    f"{object_body_name}_freejoint")
+        obj_dof = model.jnt_dofadr[obj_jid]
+    else:
+        obj_bid = -1
+        obj_dof = -1
+
+    hand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "hand")
+
+    def _stabilize_grasp(gripper_state):
+        if obj_bid < 0:
+            return
+
+        if gripper_state != "close":
+            data.qfrc_applied[obj_dof:obj_dof+6] = 0.0
+            grasp_offset["value"] = None
+            return
+
+        hand_pos = data.xpos[hand_id].copy()
+        obj_pos = data.xpos[obj_bid].copy()
+
+        if grasp_offset["value"] is None:
+            xy_dist = np.linalg.norm(hand_pos[:2] - obj_pos[:2])
+            z_gap = hand_pos[2] - obj_pos[2]
+            if xy_dist > 0.12 or z_gap < 0.02 or z_gap > 0.20:
+                return
+            grasp_offset["value"] = obj_pos - hand_pos
+
+        target = hand_pos + grasp_offset["value"]
+        obj_vel = data.qvel[obj_dof:obj_dof+3]
+        force = 250.0 * (target - obj_pos) - 25.0 * obj_vel
+        force = np.clip(force, -60.0, 60.0)
+        data.qfrc_applied[obj_dof:obj_dof+3] += force
 
     def _save_frame(step_name):
         if save_frames and renderer is not None:
@@ -236,6 +278,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 data.ctrl[:7] = q_des
                 data.qfrc_applied[:7] = extra_kp*(q_des-data.qpos[:7]) - extra_kd*data.qvel[:7]
                 set_gripper(data, "open")
+                _stabilize_grasp("open")
                 mujoco.mj_step(model, data)
 
             # Phase 2: Settle at grasp position, fingers open (300 steps)
@@ -243,6 +286,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
                 set_gripper(data, "open")
+                _stabilize_grasp("open")
                 mujoco.mj_step(model, data)
 
             _print_status(i+1, total, "2_descend", 900)
@@ -256,6 +300,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 set_gripper(data, "close")
                 data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -cf
                 data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -cf
+                _stabilize_grasp("close")
                 mujoco.mj_step(model, data)
 
             _print_status(i+1, total, "3_close", 1200)
@@ -273,6 +318,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 set_gripper(data, "close")
                 data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -100.0
                 data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -100.0
+                _stabilize_grasp("close")
                 mujoco.mj_step(model, data)
             data.qfrc_applied[:] = 0.0
             results.append({"label": label, "success": True, "steps": 1000})
@@ -281,7 +327,8 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
 
         else:
             # Normal waypoint movement
-            success, steps = move_to_target(model, data, q_target, gripper, 1500)
+            success, steps = move_to_target(model, data, q_target, gripper, 1500,
+                                            grasp_stabilizer=_stabilize_grasp)
             results.append({"label": label, "success": success, "steps": steps})
             _print_status(i+1, total, label, steps)
             _save_frame(f"{i}_{label}")

@@ -18,9 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from perception import perceive_object
 from grasp_planner import compute_grasp_waypoints, compute_joint_targets
 from controller import set_gripper
+from evaluation import YCB_OBJECTS, randomize_scene
 
-SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-    "mujoco_menagerie", "franka_emika_panda", "pick_and_place_scene.xml")
+SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
+ACTIVE_OBJECT = "cracker_box"
+OBJ_CFG = YCB_OBJECTS[ACTIVE_OBJECT]
 
 FRAME_DIR = "output/frames"
 os.makedirs(FRAME_DIR, exist_ok=True)
@@ -30,9 +32,8 @@ data = mujoco.MjData(model)
 renderer = mujoco.Renderer(model, height=480, width=640)
 
 key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
-obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "target_object")
+obj_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, OBJ_CFG["body"])
 bsk_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "basket")
-oj = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "object_freejoint")]
 bj = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "basket_freejoint")]
 fj1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint1")
 fj2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint2")
@@ -60,26 +61,10 @@ def run_and_record(ep_num):
     global frame_count
     frame_count = 0
 
-    # Setup scene
-    mujoco.mj_resetDataKeyframe(model, data, key_id)
-    ox = rng.uniform(0.40, 0.60)
-    oy = rng.uniform(-0.10, 0.15)
-    bx = rng.uniform(0.40, 0.60)
-    by = rng.uniform(-0.30, -0.15)
-    for _ in range(100):
-        bx2 = rng.uniform(0.40, 0.60)
-        by2 = rng.uniform(-0.30, -0.15)
-        if np.sqrt((bx2-ox)**2 + (by2-oy)**2) > 0.20:
-            bx, by = bx2, by2
-            break
-
-    data.qpos[oj:oj+7] = [ox, oy, 0.45, 1, 0, 0, 0]
-    data.qpos[bj:bj+7] = [bx, by, 0.41, 1, 0, 0, 0]
-    mujoco.mj_forward(model, data)
-    for i in range(500):
-        mujoco.mj_step(model, data)
-        if i % RENDER_EVERY == 0:
-            save_frame(ep_num)
+    # Setup scene using the same multi-object randomizer as evaluation.py
+    gt_obj, gt_bsk = randomize_scene(model, data, rng, ACTIVE_OBJECT)
+    for _ in range(50):
+        save_frame(ep_num)
 
     # Perception
     mujoco.mj_forward(model, data)
@@ -90,7 +75,7 @@ def run_and_record(ep_num):
     depth = renderer.render().copy()
     renderer.disable_depth_rendering()
 
-    obj_r = perceive_object(rgb, depth, model, data, "overhead_cam", "yellow_object")
+    obj_r = perceive_object(rgb, depth, model, data, "overhead_cam", OBJ_CFG["color_target"])
     bsk_r = perceive_object(rgb, depth, model, data, "overhead_cam", "red_basket")
 
     if obj_r is None:
@@ -113,14 +98,14 @@ def run_and_record(ep_num):
         renderer.update_scene(data, camera="overhead_cam")
         depth = renderer.render().copy()
         renderer.disable_depth_rendering()
-        obj_r = perceive_object(rgb, depth, model, data, "overhead_cam", "yellow_object")
+        obj_r = perceive_object(rgb, depth, model, data, "overhead_cam", OBJ_CFG["color_target"])
         bsk_r = perceive_object(rgb, depth, model, data, "overhead_cam", "red_basket")
 
     gt_obj = data.xpos[obj_bid].copy()
     obj_pos = obj_r["position"] if obj_r else gt_obj.copy()
     if obj_r is None:
-        obj_pos[2] += 0.04
-    bsk_pos = bsk_r["position"] if bsk_r else np.array([bx, by, 0.41])
+        obj_pos[2] += OBJ_CFG["flat_half_height"]
+    bsk_pos = bsk_r["position"] if bsk_r else gt_bsk.copy()
     R_obj = obj_r["rotation"] if obj_r else None
 
     # Plan

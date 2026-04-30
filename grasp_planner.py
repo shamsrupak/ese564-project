@@ -41,10 +41,8 @@ def compute_grasp_orientation(R_obj=None):
     gz = np.array([0.0, 0.0, -1.0])
 
     # The Panda gripper fingers open/close along the LOCAL y-axis of the
-    # hand body. We want them to squeeze across the object's narrow side.
-    # For our upright objects, squeezing along world-Y works well since
-    # object Y-extent (4cm) < gripper max opening (8cm).
-    # Gripper x-axis = world x-axis -> fingers squeeze along world y-axis
+    # hand body. The original world-Y squeeze is empirically the most stable
+    # for this scene's mesh/collision setup.
     gx = np.array([1.0, 0.0, 0.0])
     gy = np.cross(gz, gx)
 

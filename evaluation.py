@@ -27,8 +27,7 @@ from controller import execute_pick_and_place, check_success
 # ================================================================
 # CONFIGURATION
 # ================================================================
-SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-    "mujoco_menagerie", "franka_emika_panda", "pick_and_place_scene.xml")
+SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
 
 OBJ_X_RANGE = (0.40, 0.60)
 OBJ_Y_RANGE = (-0.10, 0.15)
@@ -193,7 +192,8 @@ def run_episode(model, data, renderer, episode_num, active_object,
     execute_pick_and_place(
         model, data, joint_targets,
         renderer=renderer if save_images else None,
-        save_frames=save_images, output_dir=output_dir)
+        save_frames=save_images, output_dir=output_dir,
+        object_body_name=cfg["body"])
 
     # ---- Check success ----
     mujoco.mj_forward(model, data)
