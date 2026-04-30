@@ -125,7 +125,8 @@ def randomize_scene(model, data, rng, active_object):
 
 
 def run_episode(model, data, renderer, episode_num, active_object,
-                save_images=False, output_dir="output", use_perception=True):
+                save_images=False, output_dir="output", use_perception=True,
+                wrist_renderer=None):
     """Run one pick-and-place episode with a specific YCB object."""
     t_start = time.time()
     cfg = YCB_OBJECTS[active_object]
@@ -231,14 +232,14 @@ def run_episode(model, data, renderer, episode_num, active_object,
 
         # Capture wrist camera image (320x240, attached to hand body)
         try:
-            wrist_renderer = mujoco.Renderer(model, height=240, width=320)
-            wrist_renderer.update_scene(data, camera="wrist_cam")
-            wrist_rgb = wrist_renderer.render().copy()
+            wr = wrist_renderer if wrist_renderer is not None else mujoco.Renderer(model, height=240, width=320)
+            wr.update_scene(data, camera="wrist_cam")
+            wrist_rgb = wr.render().copy()
 
-            wrist_renderer.enable_depth_rendering()
-            wrist_renderer.update_scene(data, camera="wrist_cam")
-            wrist_depth = wrist_renderer.render().copy()
-            wrist_renderer.disable_depth_rendering()
+            wr.enable_depth_rendering()
+            wr.update_scene(data, camera="wrist_cam")
+            wrist_depth = wr.render().copy()
+            wr.disable_depth_rendering()
 
             if save_images:
                 cv2.imwrite(f"{output_dir}/ep{episode_num}_wrist.png",
@@ -265,7 +266,6 @@ def run_episode(model, data, renderer, episode_num, active_object,
                                                         grasp_width=grasp_width)
                     joint_targets = compute_joint_targets(model, data, waypoints)
 
-            wrist_renderer.close()
         except Exception:
             pass  # wrist camera not available, continue with overhead estimate
 
@@ -333,6 +333,7 @@ def main():
     model = mujoco.MjModel.from_xml_path(SCENE_PATH)
     data = mujoco.MjData(model)
     renderer = mujoco.Renderer(model, height=IMG_H, width=IMG_W)
+    wrist_renderer = mujoco.Renderer(model, height=240, width=320)
     print(f"\nModel loaded: {SCENE_PATH}")
     print(f"{'='*70}\n")
 
@@ -359,6 +360,7 @@ def main():
                 save_images=args.save_images or (ep < 3),
                 output_dir=args.output_dir,
                 use_perception=not args.use_gt,
+                wrist_renderer=wrist_renderer,
             )
 
             all_results.append(result)
