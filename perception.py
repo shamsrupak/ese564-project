@@ -268,6 +268,26 @@ def estimate_centroid(points):
     return np.mean(points, axis=0)
 
 
+def estimate_grasp_width(points, color_target, grasp_axis=None):
+    """
+    Estimate the object's tabletop width along the gripper closing direction.
+
+    The Panda fingers close along world Y for the top-down grasp used here, so
+    the default measurement is the point-cloud extent along Y. Percentiles make
+    the estimate less sensitive to a few noisy depth samples.
+    """
+    if color_target == "red_basket":
+        return None
+
+    if grasp_axis is None:
+        grasp_axis = np.array([0.0, 1.0, 0.0])
+
+    grasp_axis = grasp_axis / np.linalg.norm(grasp_axis)
+    projected = points @ grasp_axis
+    width = np.percentile(projected, 95) - np.percentile(projected, 5)
+    return float(np.clip(width, 0.015, 0.075))
+
+
 def filter_workspace_points(points, color_target):
     """
     Remove reconstructed points outside the tabletop workspace.
@@ -478,6 +498,7 @@ def perceive_object(rgb_image, depth_meters, model, data,
 
     # Step 4: Centroid
     centroid = estimate_centroid(points)
+    grasp_width = estimate_grasp_width(points, color_target)
 
     # Step 5: PCA
     R_pca, eigenvalues = estimate_orientation_pca(points)
@@ -503,6 +524,7 @@ def perceive_object(rgb_image, depth_meters, model, data,
         "rotation": R_final,
         "mask": mask,
         "point_cloud": points,
+        "grasp_width": grasp_width,
         "eigenvalues": eigenvalues,
         "icp_converged": icp_converged,
         "n_pixels": n_pixels,

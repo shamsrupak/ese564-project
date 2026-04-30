@@ -134,9 +134,12 @@ def run_and_record(ep_num):
         obj_pos[2] += OBJ_CFG["flat_half_height"]
     bsk_pos = bsk_r["position"] if bsk_r else gt_bsk.copy()
     R_obj = obj_r["rotation"] if obj_r else None
+    grasp_width = obj_r.get("grasp_width") if obj_r else None
 
     # Plan
-    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
+    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
+                                        object_name=ACTIVE_OBJECT,
+                                        grasp_width=grasp_width)
     joint_targets = compute_joint_targets(model, data, waypoints)
 
     if not all(jt["ik_success"] for jt in joint_targets):
@@ -148,11 +151,14 @@ def run_and_record(ep_num):
         label = jt["label"]
         q_target = jt["q"]
         gripper = jt["gripper"]
+        gripper_width = jt.get("gripper_width")
 
         if "2_grasp" in label:
             # Combined descent + close
             q_start = data.qpos[:7].copy()
             q_grasp = q_target
+            open_width = gripper_width
+            close_width = joint_targets[i + 1].get("gripper_width") if i + 1 < len(joint_targets) else gripper_width
 
             # Descent
             for step in range(600):
@@ -161,7 +167,7 @@ def run_and_record(ep_num):
                 q_des = q_start + alpha * (q_grasp - q_start)
                 data.ctrl[:7] = q_des
                 data.qfrc_applied[:7] = extra_kp*(q_des-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, "open")
+                set_gripper(data, "open", gripper_width=open_width)
                 mujoco.mj_step(model, data)
                 if step % RENDER_EVERY == 0:
                     save_frame(ep_num)
@@ -170,7 +176,7 @@ def run_and_record(ep_num):
             for step in range(300):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, "open")
+                set_gripper(data, "open", gripper_width=open_width)
                 mujoco.mj_step(model, data)
                 if step % RENDER_EVERY == 0:
                     save_frame(ep_num)
@@ -179,8 +185,9 @@ def run_and_record(ep_num):
             for step in range(1200):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                cf = min(100.0, 100.0 * step / 400.0)
-                set_gripper(data, "close")
+                max_cf = 20.0 if close_width is not None else 100.0
+                cf = min(max_cf, max_cf * step / 400.0)
+                set_gripper(data, "close", gripper_width=close_width)
                 data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -cf
                 data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -cf
                 mujoco.mj_step(model, data)
@@ -202,12 +209,13 @@ def run_and_record(ep_num):
                 q_des = q_start + alpha * (q_target - q_start)
                 data.ctrl[:7] = q_des
                 data.qfrc_applied[:7] = extra_kp*(q_des-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, gripper)
+                set_gripper(data, gripper, gripper_width=gripper_width)
                 fj1_dof = model.jnt_dofadr[fj1_id]
                 fj2_dof = model.jnt_dofadr[fj2_id]
                 if gripper == "close":
-                    data.qfrc_applied[fj1_dof] = -100.0
-                    data.qfrc_applied[fj2_dof] = -100.0
+                    close_force = 20.0 if gripper_width is not None else 100.0
+                    data.qfrc_applied[fj1_dof] = -close_force
+                    data.qfrc_applied[fj2_dof] = -close_force
                 else:
                     data.qfrc_applied[fj1_dof] = 0.0
                     data.qfrc_applied[fj2_dof] = 0.0

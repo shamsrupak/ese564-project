@@ -171,11 +171,13 @@ def run_episode(model, data, renderer, episode_num, active_object,
         if obj_result is not None:
             obj_pos = obj_result["position"]
             R_obj = obj_result["rotation"]
+            grasp_width = obj_result.get("grasp_width")
             perception_error_mm = np.linalg.norm(obj_pos - gt_obj) * 1000
         else:
             obj_pos = gt_obj.copy()
             obj_pos[2] += cfg["flat_half_height"]
             R_obj = None
+            grasp_width = None
             perception_error_mm = -1
 
         bsk_pos = bsk_result["position"] if bsk_result else gt_bsk.copy()
@@ -184,9 +186,12 @@ def run_episode(model, data, renderer, episode_num, active_object,
         obj_pos[2] += cfg["flat_half_height"]
         bsk_pos = gt_bsk.copy()
         R_obj = None
+        grasp_width = None
 
     # ---- Grasp planning ----
-    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj)
+    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
+                                        object_name=active_object,
+                                        grasp_width=grasp_width)
 
     # ---- Inverse kinematics ----
     joint_targets = compute_joint_targets(model, data, waypoints)

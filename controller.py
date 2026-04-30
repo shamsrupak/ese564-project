@@ -66,7 +66,13 @@ def pd_control(data, q_desired, qdot_desired=None, kp=None, kd=None):
     return tau
 
 
-def set_gripper(data, state, gripper_value=None):
+def gripper_width_to_ctrl(width):
+    """Convert total finger gap in meters to the Panda gripper actuator command."""
+    width = np.clip(width, 0.0, 0.08)
+    return float(width / 0.08 * 255.0)
+
+
+def set_gripper(data, state, gripper_value=None, gripper_width=None):
     """
     Control the gripper (open or close).
 
@@ -77,9 +83,12 @@ def set_gripper(data, state, gripper_value=None):
         data: MuJoCo data object
         state: "open" or "close"
         gripper_value: override value (0-255). If None, uses defaults.
+        gripper_width: desired total gap between fingers in meters.
     """
     if gripper_value is not None:
         data.ctrl[7] = gripper_value
+    elif gripper_width is not None:
+        data.ctrl[7] = gripper_width_to_ctrl(gripper_width)
     elif state == "open":
         data.ctrl[7] = 255.0   # fully open
     elif state == "close":
@@ -115,7 +124,7 @@ def interpolate_joint_trajectory(q_start, q_end, num_steps):
 
 def move_to_target(model, data, q_target, gripper_state="open",
                    duration_steps=1500, kp=None, kd=None,
-                   grasp_stabilizer=None):
+                   grasp_stabilizer=None, gripper_width=None):
     """
     Move the robot to a target joint configuration.
 
@@ -159,14 +168,15 @@ def move_to_target(model, data, q_target, gripper_state="open",
         data.qfrc_applied[:7] = extra_kp * q_err - extra_kd * qdot
 
         # Gripper control
-        set_gripper(data, gripper_state)
+        set_gripper(data, gripper_state, gripper_width=gripper_width)
 
         # Extra finger forces ONLY when gripper should be closed (holding object)
         fj1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint1")
         fj2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint2")
         if gripper_state == "close":
-            data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -100.0
-            data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -100.0
+            close_force = 20.0 if gripper_width is not None else 100.0
+            data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -close_force
+            data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -close_force
         else:
             # EXPLICITLY clear finger forces so they actually open
             data.qfrc_applied[model.jnt_dofadr[fj1_id]] = 0.0
@@ -263,11 +273,14 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
         label = jt["label"]
         q_target = jt["q"]
         gripper = jt["gripper"]
+        gripper_width = jt.get("gripper_width")
 
         # COMBINED GRASP: merge "2_grasp" + "3_close_gripper" into one motion
         if "2_grasp" in label:
             q_grasp = q_target
             q_start = data.qpos[:7].copy()
+            open_width = gripper_width
+            close_width = joint_targets[i + 1].get("gripper_width") if i + 1 < total else gripper_width
 
             # Phase 1: Descent (600 steps)
             for step in range(600):
@@ -276,7 +289,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 q_des = q_start + alpha * (q_grasp - q_start)
                 data.ctrl[:7] = q_des
                 data.qfrc_applied[:7] = extra_kp*(q_des-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, "open")
+                set_gripper(data, "open", gripper_width=open_width)
                 _stabilize_grasp("open")
                 mujoco.mj_step(model, data)
 
@@ -284,7 +297,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             for step in range(300):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, "open")
+                set_gripper(data, "open", gripper_width=open_width)
                 _stabilize_grasp("open")
                 mujoco.mj_step(model, data)
 
@@ -295,8 +308,9 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             for step in range(1200):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                cf = min(100.0, 100.0 * step / 400.0)
-                set_gripper(data, "close")
+                max_cf = 20.0 if close_width is not None else 100.0
+                cf = min(max_cf, max_cf * step / 400.0)
+                set_gripper(data, "close", gripper_width=close_width)
                 data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -cf
                 data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -cf
                 _stabilize_grasp("close")
@@ -314,9 +328,10 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             for step in range(1000):
                 data.ctrl[:7] = q_target
                 data.qfrc_applied[:7] = extra_kp*(q_target-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                set_gripper(data, "close")
-                data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -100.0
-                data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -100.0
+                set_gripper(data, "close", gripper_width=gripper_width)
+                close_force = 20.0 if gripper_width is not None else 100.0
+                data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -close_force
+                data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -close_force
                 _stabilize_grasp("close")
                 mujoco.mj_step(model, data)
             data.qfrc_applied[:] = 0.0
@@ -327,7 +342,8 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
         else:
             # Normal waypoint movement
             success, steps = move_to_target(model, data, q_target, gripper, 1500,
-                                            grasp_stabilizer=_stabilize_grasp)
+                                            grasp_stabilizer=_stabilize_grasp,
+                                            gripper_width=gripper_width)
             results.append({"label": label, "success": success, "steps": steps})
             _print_status(i+1, total, label, steps)
             _save_frame(f"{i}_{label}")
