@@ -91,6 +91,12 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     # Offset from hand body to fingertip center
     # The hand body is 0.058m above where the fingertips actually grasp
     HAND_TO_FINGERTIP = 0.058
+    TABLE_TOP_Z = 0.40
+    MIN_FINGERTIP_Z = TABLE_TOP_Z + 0.012
+    # The lowest gripper collision geoms sit farther below the hand body than
+    # the nominal fingertip center, so keep the hand high enough that those
+    # pads cannot be commanded through the tabletop.
+    MIN_HAND_Z = TABLE_TOP_Z + 0.122
 
     # Keep box grasps near the outside top edges. The mustard bottle tolerates
     # the original deeper target, but the box meshes let the gripper visibly
@@ -101,9 +107,11 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
         "mustard_bottle": -0.005,
     }
     fingertip_grasp_z = obj_position[2] + grasp_z_offsets.get(object_name, -0.005)
+    fingertip_grasp_z = max(fingertip_grasp_z, MIN_FINGERTIP_Z)
 
     # Hand position = fingertip position + offset
     hand_grasp_z = fingertip_grasp_z + HAND_TO_FINGERTIP
+    hand_grasp_z = max(hand_grasp_z, MIN_HAND_Z)
     lift_z = hand_grasp_z + lift_height
     above_bin_z = basket_position[2] + HAND_TO_FINGERTIP + above_bin_height
     wall_cross_z = max(wall_clearance_z, lift_z, above_bin_z)
