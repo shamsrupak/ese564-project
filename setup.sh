@@ -33,7 +33,7 @@ echo "  Found: $PYVER"
 # ---- Step 2: Install dependencies ----
 echo ""
 echo "[2/5] Installing Python packages..."
-pip install mujoco numpy opencv-python-headless trimesh scipy
+pip3 install mujoco numpy opencv-python-headless trimesh scipy
 echo "  Done."
 
 # ---- Step 3: Clone MuJoCo Menagerie ----
@@ -72,6 +72,41 @@ else
     fi
     echo "  Wrist camera added."
 fi
+
+echo "  Updating Panda home keyframe for the full pick-and-place scene..."
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+panda_xml = Path("mujoco_menagerie/franka_emika_panda/panda.xml")
+text = panda_xml.read_text()
+text = text.replace(
+    '<joint axis="0 1 0" type="slide" range="0 0.04"/>',
+    '<joint axis="0 1 0" type="slide" range="0 0.05"/>',
+)
+
+# The Panda model contributes 9 qpos values. The project scene then adds
+# four free joints (basket + 3 objects), each contributing 7 qpos values.
+home_qpos = [
+    "0", "0", "0", "-1.57079", "0", "1.57079", "-0.7853", "0.05", "0.05",
+    "0.55", "-0.25", "0.41", "1", "0", "0", "0",
+    "0.5", "0.0", "0.45", "1", "0", "0", "0",
+    "0.5", "0.0", "10.0", "1", "0", "0", "0",
+    "0.5", "0.0", "10.0", "1", "0", "0", "0",
+]
+replacement = f'<key name="home" qpos="{" ".join(home_qpos)}"'
+updated, count = re.subn(
+    r'<key name="home" qpos="[^"]*"',
+    replacement,
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("  ERROR: Panda home keyframe not found")
+
+panda_xml.write_text(updated)
+print("  Panda home keyframe updated.")
+PY
 
 # ---- Step 5: Output directory ----
 echo ""

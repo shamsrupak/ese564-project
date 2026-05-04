@@ -51,12 +51,13 @@ def compute_grasp_orientation(R_obj=None):
 
 
 def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
-                            pre_grasp_height=0.12,
-                            lift_height=0.18,
+                            pre_grasp_height=0.16,
+                            lift_height=0.22,
                             above_bin_height=0.18,
                             release_height=0.06,
-                            wall_y=-0.10,
-                            wall_clearance_z=0.72,
+                            retreat_height=0.06,
+                            wall_y=-0.11,
+                            wall_clearance_z=0.76,
                             object_name=None,
                             grasp_width=None):
     """
@@ -91,6 +92,8 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     # Offset from hand body to fingertip center
     # The hand body is 0.058m above where the fingertips actually grasp
     HAND_TO_FINGERTIP = 0.058
+    TABLE_TOP_Z = 0.40
+    MIN_HAND_GRASP_Z = TABLE_TOP_Z + 0.115
 
     # Keep box grasps near the outside top edges. The mustard bottle tolerates
     # the original deeper target, but the box meshes let the gripper visibly
@@ -102,8 +105,10 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     }
     fingertip_grasp_z = obj_position[2] + grasp_z_offsets.get(object_name, -0.005)
 
-    # Hand position = fingertip position + offset
-    hand_grasp_z = fingertip_grasp_z + HAND_TO_FINGERTIP
+    # Hand position = fingertip position + offset. Clamp the wrist height so
+    # the fingertip collision pads are not commanded through the tabletop.
+    hand_grasp_z = max(fingertip_grasp_z + HAND_TO_FINGERTIP,
+                       MIN_HAND_GRASP_Z)
     lift_z = hand_grasp_z + lift_height
     above_bin_z = basket_position[2] + HAND_TO_FINGERTIP + above_bin_height
     wall_cross_z = max(wall_clearance_z, lift_z, above_bin_z)
@@ -117,13 +122,15 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     if grasp_width is None:
         grasp_width = default_widths.get(object_name, 0.045)
     grasp_width = float(np.clip(grasp_width, 0.015, 0.078))
-    approach_width = float(np.clip(grasp_width + 0.015, 0.025, 0.080))
-    hold_width = grasp_width
+    approach_width = float(np.clip(grasp_width + 0.015, 0.025, 0.100))
+    hold_width = float(np.clip(grasp_width - 0.006, 0.012, 0.078))
 
     waypoints = [
         {
-            # First move hand high above the table center to avoid sweeping through objects
-            "position": np.array([0.4, 0.0, 0.65]),
+            # First move hand high above the table center to avoid sweeping through objects.
+            # This also gives sequence runs a safe reset path from the basket
+            # side back to the pick side between objects.
+            "position": np.array([0.4, 0.0, wall_cross_z]),
             "orientation": R_grip,
             "gripper": "open",
             "gripper_width": approach_width,
@@ -179,11 +186,19 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
         },
         {
             "position": np.array([basket_position[0], basket_position[1],
-                                  basket_position[2] + HAND_TO_FINGERTIP + release_height]),
+                                  above_bin_z]),
             "orientation": R_grip,
             "gripper": "open",
             "gripper_width": approach_width,
             "label": "7_release",
+        },
+        {
+            "position": np.array([basket_position[0], basket_position[1],
+                                  above_bin_z + retreat_height]),
+            "orientation": R_grip,
+            "gripper": "open",
+            "gripper_width": approach_width,
+            "label": "8_retreat",
         },
     ]
 

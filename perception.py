@@ -282,8 +282,19 @@ def estimate_grasp_width(points, color_target, grasp_axis=None):
     if grasp_axis is None:
         grasp_axis = np.array([0.0, 1.0, 0.0])
 
-    grasp_axis = grasp_axis / np.linalg.norm(grasp_axis)
+    axis_norm = np.linalg.norm(grasp_axis)
+    if not np.isfinite(axis_norm) or axis_norm < 1e-8:
+        grasp_axis = np.array([0.0, 1.0, 0.0])
+        axis_norm = 1.0
+    points = points[np.all(np.isfinite(points), axis=1)]
+    if len(points) < 10:
+        return None
+
+    grasp_axis = grasp_axis / axis_norm
     projected = points @ grasp_axis
+    projected = projected[np.isfinite(projected)]
+    if len(projected) < 10:
+        return None
     width = np.percentile(projected, 95) - np.percentile(projected, 5)
     return float(np.clip(width, 0.015, 0.075))
 

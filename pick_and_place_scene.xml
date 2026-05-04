@@ -23,26 +23,32 @@
     <light pos="0.5 0.5 1.2" dir="0 -0.2 -1" diffuse="0.3 0.3 0.3"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="3" conaffinity="3"/>
     <body name="table" pos="0.5 0.0 0.2">
-      <geom name="table_top" type="box" size="0.35 0.4 0.2"
-        rgba="0.85 0.85 0.80 1" mass="100" contype="2" conaffinity="2"/>
+      <geom name="table_top" type="box" size="0.35 0.6 0.2"
+        rgba="0.85 0.85 0.80 1" mass="100" contype="3" conaffinity="3"
+        condim="4" friction="2.0 1.0 0.01" solref="0.002 1" solimp="0.95 0.99 0.001"/>
     </body>
     <camera name="overhead_cam" pos="0.5 0.0 1.4" xyaxes="0 -1 0 1 0 0" fovy="60"/>
     <body name="obstacle" pos="0.5 -0.10 0.49">
       <geom name="obstacle_geom" type="box" size="0.22 0.012 0.09"
         rgba="0.1 0.2 0.9 1" contype="3" conaffinity="3" mass="5.0"/>
     </body>
-    <body name="basket" pos="0.55 -0.2 0.41">
+    <body name="basket" pos="0.55 -0.25 0.41">
       <freejoint name="basket_freejoint"/>
       <geom name="basket_floor" type="box" size="0.10 0.10 0.005" contype="3" conaffinity="3"
-        pos="0 0 0" rgba="0.85 0.15 0.15 1" mass="5.0" friction="1.5 0.8 0.01"/>
+        pos="0 0 0" rgba="0.85 0.15 0.15 1" mass="5.0"
+        condim="4" friction="0.8 0.02 0.001" solref="0.002 1" solimp="0.95 0.99 0.001"/>
       <geom name="basket_front" type="box" size="0.10 0.005 0.04"
-        pos="0 0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
+        pos="0 0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"
+        condim="4" friction="0.7 0.02 0.001"/>
       <geom name="basket_back" type="box" size="0.10 0.005 0.04"
-        pos="0 -0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
+        pos="0 -0.095 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"
+        condim="4" friction="0.7 0.02 0.001"/>
       <geom name="basket_left" type="box" size="0.005 0.10 0.04"
-        pos="0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
+        pos="0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"
+        condim="4" friction="0.7 0.02 0.001"/>
       <geom name="basket_right" type="box" size="0.005 0.10 0.04"
-        pos="-0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"/>
+        pos="-0.095 0 0.04" rgba="0.85 0.15 0.15 1" contype="3" conaffinity="3"
+        condim="4" friction="0.7 0.02 0.001"/>
     </body>
 
     <!-- YCB 1: Cracker Box (yellow) - 16384-tri mesh at 0.5x scale -->
@@ -52,7 +58,8 @@
       <geom name="cracker_box_vis" type="mesh" mesh="cracker_box_visual"
         rgba="0.95 0.85 0.2 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
       <geom name="cracker_box_col" type="box" size="0.018 0.041 0.054"
-        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.411"
+        contype="3" conaffinity="3" friction="1.1 0.02 0.001" condim="4" mass="0.411"
+        solref="0.0015 1" solimp="0.97 0.995 0.0005"
         rgba="0.95 0.85 0.2 0.0"/>
     </body>
 
@@ -63,7 +70,8 @@
       <geom name="mustard_bottle_vis" type="mesh" mesh="mustard_bottle_visual"
         rgba="0.2 0.85 0.3 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
       <geom name="mustard_bottle_col" type="box" size="0.025 0.017 0.048"
-        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.603"
+        contype="3" conaffinity="3" friction="1.1 0.02 0.001" condim="4" mass="0.603"
+        solref="0.0015 1" solimp="0.97 0.995 0.0005"
         rgba="0.2 0.85 0.3 0.0"/>
     </body>
 
@@ -74,8 +82,17 @@
       <geom name="sugar_box_vis" type="mesh" mesh="sugar_box_visual"
         rgba="0.2 0.85 0.85 1" contype="0" conaffinity="0" group="1" mass="0.001"/>
       <geom name="sugar_box_col" type="box" size="0.013 0.024 0.044"
-        contype="3" conaffinity="3" friction="1.5 0.8 0.01" condim="4" mass="0.514"
+        contype="3" conaffinity="3" friction="1.1 0.02 0.001" condim="4" mass="0.514"
+        solref="0.0015 1" solimp="0.97 0.995 0.0005"
         rgba="0.2 0.85 0.85 0.0"/>
     </body>
   </worldbody>
+  <contact>
+    <pair geom1="cracker_box_col" geom2="mustard_bottle_col" condim="4"
+      friction="0.25 0.005 0.0001" solref="0.002 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="cracker_box_col" geom2="sugar_box_col" condim="4"
+      friction="0.25 0.005 0.0001" solref="0.002 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="mustard_bottle_col" geom2="sugar_box_col" condim="4"
+      friction="0.25 0.005 0.0001" solref="0.002 1" solimp="0.95 0.99 0.001"/>
+  </contact>
 </mujoco>

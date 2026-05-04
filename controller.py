@@ -21,6 +21,21 @@ import numpy as np
 # Higher gains for base joints (carry more weight), lower for wrist
 DEFAULT_KP = np.array([600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0])
 DEFAULT_KD = np.array([50.0, 50.0, 50.0, 50.0, 20.0, 20.0, 10.0])
+MAX_GRIPPER_WIDTH = 0.10
+WIDTH_GRASP_FORCE = 12.0
+
+
+def apply_finger_close_force(model, data, finger_joint_ids, force, min_q=0.002):
+    """Apply inward finger force without pushing slide joints past closed."""
+    for joint_id in finger_joint_ids:
+        qadr = model.jnt_qposadr[joint_id]
+        dof = model.jnt_dofadr[joint_id]
+        if force <= 0.0:
+            data.qfrc_applied[dof] = 0.0
+        elif data.qpos[qadr] > min_q or data.qvel[dof] > 0.0:
+            data.qfrc_applied[dof] = -force
+        else:
+            data.qfrc_applied[dof] = 0.0
 
 
 def pd_control(data, q_desired, qdot_desired=None, kp=None, kd=None):
@@ -49,8 +64,8 @@ def pd_control(data, q_desired, qdot_desired=None, kp=None, kd=None):
 
 def gripper_width_to_ctrl(width):
     """Convert total finger gap in meters to the Panda gripper actuator command."""
-    width = np.clip(width, 0.0, 0.08)
-    return float(width / 0.08 * 255.0)
+    width = np.clip(width, 0.0, MAX_GRIPPER_WIDTH)
+    return float(width / MAX_GRIPPER_WIDTH * 255.0)
 
 
 def set_gripper(data, state, gripper_value=None, gripper_width=None):
@@ -89,7 +104,8 @@ def interpolate_joint_trajectory(q_start, q_end, num_steps):
 
 def move_to_target(model, data, q_target, gripper_state="open",
                    duration_steps=1500, kp=None, kd=None,
-                   grasp_stabilizer=None, gripper_width=None):
+                   grasp_stabilizer=None, gripper_width=None,
+                   frame_callback=None):
     """
     Move the robot to a target joint configuration.
 
@@ -123,9 +139,9 @@ def move_to_target(model, data, q_target, gripper_state="open",
         fj1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint1")
         fj2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint2")
         if gripper_state == "close":
-            close_force = 20.0 if gripper_width is not None else 100.0
-            data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -close_force
-            data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -close_force
+            close_force = WIDTH_GRASP_FORCE if gripper_width is not None else 100.0
+            min_q = max(0.002, 0.5 * gripper_width - 0.002) if gripper_width is not None else 0.002
+            apply_finger_close_force(model, data, (fj1_id, fj2_id), close_force, min_q=min_q)
         else:
             data.qfrc_applied[model.jnt_dofadr[fj1_id]] = 0.0
             data.qfrc_applied[model.jnt_dofadr[fj2_id]] = 0.0
@@ -134,6 +150,8 @@ def move_to_target(model, data, q_target, gripper_state="open",
             grasp_stabilizer(gripper_state)
 
         mujoco.mj_step(model, data)
+        if frame_callback is not None:
+            frame_callback()
 
     # Clear supplementary torques after motion
     data.qfrc_applied[:7] = 0.0
@@ -143,7 +161,8 @@ def move_to_target(model, data, q_target, gripper_state="open",
 
 def execute_pick_and_place(model, data, joint_targets, renderer=None,
                            save_frames=False, output_dir="output",
-                           object_body_name=None):
+                           object_body_name=None, frame_callback=None,
+                           use_grasp_stabilizer=False):
     """
     Execute the full pick-and-place sequence.
 
@@ -152,8 +171,8 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
     immediately starts closing the fingers.
 
     Includes:
-      - Grasp stabilizer (Sowmya): applies forces to keep object attached
-        to hand during transport
+      - Optional grasp stabilizer (Sowmya): applies forces to keep object
+        attached to hand during transport
       - RRT collision avoidance (HW3): plans around the obstacle for
         normal waypoint movements
     """
@@ -179,7 +198,7 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
 
     def _stabilize_grasp(gripper_state):
         """Apply forces to keep the grasped object locked to the hand. (Sowmya)"""
-        if obj_bid < 0:
+        if not use_grasp_stabilizer or obj_bid < 0:
             return
 
         if gripper_state != "close":
@@ -202,6 +221,8 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
         force = 250.0 * (target - obj_pos) - 25.0 * obj_vel
         force = np.clip(force, -60.0, 60.0)
         data.qfrc_applied[obj_dof:obj_dof+3] += force
+
+    active_stabilizer = _stabilize_grasp if use_grasp_stabilizer else None
 
     # ---- Helper functions ----
     def _save_frame(step_name):
@@ -247,16 +268,22 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 data.ctrl[:7] = q_des
                 data.qfrc_applied[:7] = extra_kp*(q_des-data.qpos[:7]) - extra_kd*data.qvel[:7]
                 set_gripper(data, "open", gripper_width=open_width)
-                _stabilize_grasp("open")
+                if active_stabilizer is not None:
+                    active_stabilizer("open")
                 mujoco.mj_step(model, data)
+                if frame_callback is not None:
+                    frame_callback()
 
             # Phase 2: Settle at grasp position, fingers open (300 steps)
             for step in range(300):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
                 set_gripper(data, "open", gripper_width=open_width)
-                _stabilize_grasp("open")
+                if active_stabilizer is not None:
+                    active_stabilizer("open")
                 mujoco.mj_step(model, data)
+                if frame_callback is not None:
+                    frame_callback()
 
             _print_status(i+1, total, "2_descend", 900)
             _save_frame("descend")
@@ -265,13 +292,16 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             for step in range(1200):
                 data.ctrl[:7] = q_grasp
                 data.qfrc_applied[:7] = extra_kp*(q_grasp-data.qpos[:7]) - extra_kd*data.qvel[:7]
-                max_cf = 20.0 if close_width is not None else 100.0
+                max_cf = WIDTH_GRASP_FORCE if close_width is not None else 100.0
                 cf = min(max_cf, max_cf * step / 400.0)
                 set_gripper(data, "close", gripper_width=close_width)
-                data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -cf
-                data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -cf
-                _stabilize_grasp("close")
+                min_q = max(0.002, 0.5 * close_width - 0.002) if close_width is not None else 0.002
+                apply_finger_close_force(model, data, (fj1_id, fj2_id), cf, min_q=min_q)
+                if active_stabilizer is not None:
+                    active_stabilizer("close")
                 mujoco.mj_step(model, data)
+                if frame_callback is not None:
+                    frame_callback()
 
             _print_status(i+1, total, "3_close", 1200)
             _save_frame("close")
@@ -286,14 +316,47 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
                 data.ctrl[:7] = q_target
                 data.qfrc_applied[:7] = extra_kp*(q_target-data.qpos[:7]) - extra_kd*data.qvel[:7]
                 set_gripper(data, "close", gripper_width=gripper_width)
-                close_force = 20.0 if gripper_width is not None else 100.0
-                data.qfrc_applied[model.jnt_dofadr[fj1_id]] = -close_force
-                data.qfrc_applied[model.jnt_dofadr[fj2_id]] = -close_force
-                _stabilize_grasp("close")
+                close_force = WIDTH_GRASP_FORCE if gripper_width is not None else 100.0
+                min_q = max(0.002, 0.5 * gripper_width - 0.002) if gripper_width is not None else 0.002
+                apply_finger_close_force(model, data, (fj1_id, fj2_id), close_force, min_q=min_q)
+                if active_stabilizer is not None:
+                    active_stabilizer("close")
                 mujoco.mj_step(model, data)
+                if frame_callback is not None:
+                    frame_callback()
             data.qfrc_applied[:] = 0.0
             results.append({"label": label, "success": True, "steps": 1000})
             _print_status(i+1, total, label, 1000)
+            _save_frame(f"{i}_{label}")
+
+        elif "release" in label and gripper == "open":
+            # Gentle drop release: hold the hand above the basket and ramp the
+            # finger gap open so the object falls free without a snap motion.
+            release_steps = 1200
+            start_width = float(np.clip(data.qpos[7] + data.qpos[8], 0.0, MAX_GRIPPER_WIDTH))
+            target_width = float(gripper_width if gripper_width is not None else MAX_GRIPPER_WIDTH)
+            target_width = float(np.clip(target_width, start_width, MAX_GRIPPER_WIDTH))
+
+            for step in range(release_steps):
+                alpha = min(1.0, step / (release_steps * 0.75))
+                alpha = 0.5 * (1.0 - np.cos(alpha * np.pi))
+                width = start_width + alpha * (target_width - start_width)
+
+                data.ctrl[:7] = q_target
+                data.qfrc_applied[:7] = extra_kp*(q_target-data.qpos[:7]) - extra_kd*data.qvel[:7]
+                set_gripper(data, "open", gripper_width=width)
+                open_assist = 0.0
+                data.qfrc_applied[model.jnt_dofadr[fj1_id]] = open_assist
+                data.qfrc_applied[model.jnt_dofadr[fj2_id]] = open_assist
+                if active_stabilizer is not None:
+                    active_stabilizer("open")
+                mujoco.mj_step(model, data)
+                if frame_callback is not None:
+                    frame_callback()
+
+            data.qfrc_applied[:] = 0.0
+            results.append({"label": label, "success": True, "steps": release_steps})
+            _print_status(i+1, total, label, release_steps)
             _save_frame(f"{i}_{label}")
 
         else:
@@ -303,21 +366,28 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             q_current = data.qpos[:7].copy()
             path = plan_path(q_current, q_target, model, data)
 
-            if path is not None and len(path) > 2:
+            if path is None:
+                print(f"  [{i+1}/{total}] {label:20s} FAILED  RRT could not find a safe path")
+                results.append({"label": label, "success": False, "steps": 0})
+                return results
+
+            if len(path) > 2:
                 # RRT found a multi-segment path - execute each segment
                 total_steps = 0
                 for seg_idx in range(len(path) - 1):
                     seg_steps = max(500, 1500 // (len(path) - 1))
                     move_to_target(model, data, path[seg_idx + 1], gripper, seg_steps,
-                                   grasp_stabilizer=_stabilize_grasp,
-                                   gripper_width=gripper_width)
+                                   grasp_stabilizer=active_stabilizer,
+                                   gripper_width=gripper_width,
+                                   frame_callback=frame_callback)
                     total_steps += seg_steps
                 results.append({"label": label, "success": True, "steps": total_steps})
             else:
                 # Direct path is collision-free (most common case)
                 success, steps = move_to_target(model, data, q_target, gripper, 1500,
-                                                grasp_stabilizer=_stabilize_grasp,
-                                                gripper_width=gripper_width)
+                                                grasp_stabilizer=active_stabilizer,
+                                                gripper_width=gripper_width,
+                                                frame_callback=frame_callback)
                 results.append({"label": label, "success": success, "steps": steps})
 
             _print_status(i+1, total, label, results[-1]["steps"])
