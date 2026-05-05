@@ -99,7 +99,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     # the original deeper target, but the box meshes let the gripper visibly
     # sink into the object if we use the same depth.
     grasp_z_offsets = {
-        "cracker_box": 0.025,
+        "cracker_box": 0.005,
         "sugar_box": 0.018,
         "mustard_bottle": -0.005,
     }
@@ -116,11 +116,21 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
 
     default_widths = {
         "cracker_box": 0.082,
-        "mustard_bottle": 0.034,
+        "mustard_bottle": 0.040,
+        "sugar_box": 0.047,
+    }
+    min_safe_widths = {
+        "cracker_box": 0.082,
+        "mustard_bottle": 0.040,
         "sugar_box": 0.047,
     }
     if grasp_width is None:
         grasp_width = default_widths.get(object_name, 0.045)
+    else:
+        # The camera can see only a partial/top face, especially near table
+        # edges. Keep using its estimate, but never command an opening so
+        # narrow that the fingers hit the object during descent.
+        grasp_width = max(grasp_width, min_safe_widths.get(object_name, 0.0))
     grasp_width = float(np.clip(grasp_width, 0.015, 0.078))
     approach_width = float(np.clip(grasp_width + 0.015, 0.025, 0.100))
     hold_width = float(np.clip(grasp_width - 0.006, 0.012, 0.078))
@@ -394,6 +404,16 @@ def inverse_kinematics(model, data, target_pos, target_rot, q_init=None,
     return q.copy(), False, pos_err_norm
 
 
+def ik_tolerances_for_waypoint(label):
+    """Use strict IK near the object and looser IK for free-space moves."""
+    precise_labels = ("2_grasp", "3_close_gripper")
+    if label.startswith(precise_labels):
+        return 0.005, 0.10, 0.28, 450
+    if label.startswith(("1_pre_grasp", "4_lift")):
+        return 0.007, 0.12, 0.25, 600
+    return 0.012, 0.18, 0.22, 700
+
+
 def compute_joint_targets(model, data, waypoints):
     """
     Convert a list of Cartesian waypoints to joint-angle targets using IK.
@@ -414,41 +434,58 @@ def compute_joint_targets(model, data, waypoints):
     # Start from current robot configuration
     q_current = data.qpos[:7].copy()
 
-    # Alternative starting configs for IK retry
+    # Alternative starting configs for IK retry. Several of these differ only
+    # in shoulder/elbow posture; near the right workspace edge, that is often
+    # the difference between a numerical miss and an otherwise reachable pose.
     alt_configs = [
         np.array([0.0, 0.0, 0.0, -1.57, 0.0, 1.57, -0.785]),  # home
         np.array([0.0, -0.3, 0.0, -2.0, 0.0, 1.7, 0.0]),       # tucked
         np.array([0.3, 0.0, -0.3, -1.5, 0.0, 1.5, 0.5]),       # offset
+        np.array([-0.25, -0.35, 0.25, -2.05, 0.0, 1.75, -0.3]),
+        np.array([0.35, -0.35, -0.35, -2.05, 0.0, 1.75, 0.3]),
+        np.array([0.0, -0.6, 0.0, -2.2, 0.0, 1.9, 0.0]),
+        np.array([-0.45, -0.15, 0.45, -1.7, 0.0, 1.7, -0.5]),
+        np.array([0.45, -0.15, -0.45, -1.7, 0.0, 1.7, 0.5]),
     ]
 
     joint_targets = []
 
     for wp in waypoints:
+        pos_tol, rot_tol, step_size, max_iters = ik_tolerances_for_waypoint(wp["label"])
+
         # Try IK with current config first
         q_result, success, pos_error = inverse_kinematics(
             model, data,
             target_pos=wp["position"],
             target_rot=wp["orientation"],
             q_init=q_current,
-            max_iters=300,
-            pos_tol=0.005,
-            rot_tol=0.1,
+            max_iters=max_iters,
+            pos_tol=pos_tol,
+            rot_tol=rot_tol,
+            step_size=step_size,
         )
 
         # If failed, retry with alternative starting configs
         if not success:
-            for alt_q in alt_configs:
+            retry_configs = [q_current]
+            if joint_targets:
+                retry_configs.append(joint_targets[-1]["q"])
+            retry_configs.extend(alt_configs)
+
+            for alt_q in retry_configs:
                 q_retry, s_retry, e_retry = inverse_kinematics(
                     model, data,
                     target_pos=wp["position"],
                     target_rot=wp["orientation"],
                     q_init=alt_q,
-                    max_iters=500,
-                    pos_tol=0.005,
-                    rot_tol=0.1,
+                    max_iters=max_iters + 300,
+                    pos_tol=pos_tol,
+                    rot_tol=rot_tol,
+                    step_size=step_size,
                 )
-                if s_retry:
+                if s_retry or e_retry < pos_error:
                     q_result, success, pos_error = q_retry, s_retry, e_retry
+                if success:
                     break
 
         joint_targets.append({

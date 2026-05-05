@@ -29,6 +29,7 @@ from perception import perceive_object
 
 
 SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
+TABLE_TOP_Z = 0.40
 FRAME_DIR = "output/frames"
 RENDER_EVERY = 10
 OBJECT_ORDER = list(YCB_OBJECTS.keys())
@@ -92,6 +93,13 @@ fj2_dof = model.jnt_dofadr[fj2_id]
 
 rng = np.random.default_rng(42)
 frame_count = 0
+
+
+def clamp_tabletop_object_height(obj_pos, cfg):
+    obj_pos = obj_pos.copy()
+    top_z = TABLE_TOP_Z + 2.0 * cfg["flat_half_height"]
+    obj_pos[2] = np.clip(obj_pos[2], top_z - 0.005, top_z + 0.005)
+    return obj_pos
 
 
 def clear_episode_frames(ep_num):
@@ -218,11 +226,12 @@ def capture_pose(active_object, gt_bsk, use_gt=False):
         obj_pos[2] += cfg["flat_half_height"]
         return obj_pos, gt_bsk.copy(), None, None
 
+    obj_pos = clamp_tabletop_object_height(obj_r["position"], cfg)
     bsk_pos = bsk_r["position"] if bsk_r and np.all(np.isfinite(bsk_r["position"])) else gt_bsk.copy()
     grasp_width = obj_r.get("grasp_width")
     if grasp_width is not None and not np.isfinite(grasp_width):
         grasp_width = None
-    return obj_r["position"], bsk_pos, obj_r["rotation"], grasp_width
+    return obj_pos, bsk_pos, obj_r["rotation"], grasp_width
 
 
 def plan_object(active_object, gt_bsk, use_gt=False, release_offset=None):
