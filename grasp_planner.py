@@ -113,6 +113,9 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
     above_bin_z = basket_position[2] + HAND_TO_FINGERTIP + above_bin_height
     wall_cross_z = max(wall_clearance_z, lift_z, above_bin_z)
     wall_cross_x = 0.5 * (obj_position[0] + basket_position[0])
+    release_xy = basket_position[:2].copy()
+    if object_name == "mustard_bottle":
+        release_xy[0] -= 0.040
 
     default_widths = {
         "cracker_box": 0.082,
@@ -195,7 +198,7 @@ def compute_grasp_waypoints(obj_position, basket_position, R_obj=None,
             "label": "6_above_bin",
         },
         {
-            "position": np.array([basket_position[0], basket_position[1],
+            "position": np.array([release_xy[0], release_xy[1],
                                   above_bin_z]),
             "orientation": R_grip,
             "gripper": "open",

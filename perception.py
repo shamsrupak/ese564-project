@@ -22,13 +22,17 @@ MAX_REASONABLE_DEPTH_POINT = 5.0
 # COLOR SEGMENTATION
 # ================================================================
 
-# Pre-defined HSV ranges for each object/target
-# These are tuned for our MuJoCo scene colors
+# Pre-defined HSV ranges for each object/target.
+# The cracker box uses the real YCB texture, so its visible label spans red,
+# orange, and yellow instead of the old single flat-yellow material.
 COLOR_RANGES = {
-    # Cracker box: bright yellow
+    # Cracker box: YCB texture with red/orange/yellow label colors
     "yellow_object": {
-        "lower": np.array([15, 60, 60]),
-        "upper": np.array([45, 255, 255]),
+        "ranges": [
+            (np.array([0, 70, 45]), np.array([12, 255, 255])),
+            (np.array([12, 55, 50]), np.array([45, 255, 255])),
+            (np.array([170, 70, 45]), np.array([180, 255, 255])),
+        ],
     },
     # Mustard bottle: green
     "green_object": {
@@ -68,7 +72,11 @@ def segment_by_color(rgb_image, target_name):
 
     ranges = COLOR_RANGES[target_name]
 
-    if "lower1" in ranges:
+    if "ranges" in ranges:
+        mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for lower, upper in ranges["ranges"]:
+            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lower, upper))
+    elif "lower1" in ranges:
         # Red wraps around in HSV, need two ranges
         mask1 = cv2.inRange(hsv, ranges["lower1"], ranges["upper1"])
         mask2 = cv2.inRange(hsv, ranges["lower2"], ranges["upper2"])
@@ -76,11 +84,23 @@ def segment_by_color(rgb_image, target_name):
     else:
         mask = cv2.inRange(hsv, ranges["lower"], ranges["upper"])
 
-    # Clean up noise with morphological operations
-    # Erode removes tiny specks, dilate fills small holes
+    # Clean up noise with morphological operations.
+    # The textured cracker and mustard bottle both contain warm colors, so
+    # the cracker mask must not merge multiple separate objects on the table.
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.erode(mask, kernel, iterations=1)
     mask = cv2.dilate(mask, kernel, iterations=1)
+
+    if target_name == "yellow_object":
+        close_kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if num_labels > 1:
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            valid = np.where(areas >= 40)[0]
+            if len(valid) > 0:
+                largest = 1 + valid[np.argmax(areas[valid])]
+                mask = np.where(labels == largest, 255, 0).astype(np.uint8)
 
     return mask
 
@@ -542,6 +562,9 @@ def perceive_object(rgb_image, depth_meters, model, data,
     # Step 1: Segmentation
     mask = segment_by_color(rgb_image, color_target)
     n_pixels = np.sum(mask > 0)
+
+    if color_target == "yellow_object" and n_pixels < 900:
+        return None
 
     if n_pixels < 10:
         return None  # object not visible

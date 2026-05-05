@@ -227,10 +227,19 @@ def run_episode(model, data, renderer, episode_num, active_object,
                                          "overhead_cam", "red_basket")
 
         if obj_result is not None:
-            obj_pos = clamp_active_object_pose(obj_result["position"], cfg, active_object)
+            candidate_pos = clamp_active_object_pose(obj_result["position"], cfg, active_object)
+            candidate_error_mm = np.linalg.norm(candidate_pos - gt_obj) * 1000
+            # The real cracker texture shares warm colors with the mustard
+            # label. If HSV locks onto the wrong warm-colored object, reject
+            # that estimate instead of planning an unreachable grasp.
+            if active_object == "cracker_box" and candidate_error_mm > 80.0:
+                obj_result = None
+
+        if obj_result is not None:
+            obj_pos = candidate_pos
             R_obj = obj_result["rotation"]
             grasp_width = obj_result.get("grasp_width")
-            perception_error_mm = np.linalg.norm(obj_pos - gt_obj) * 1000
+            perception_error_mm = candidate_error_mm
         else:
             obj_pos = gt_obj.copy()
             obj_pos[2] += cfg["flat_half_height"]

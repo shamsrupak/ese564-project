@@ -35,7 +35,7 @@ RENDER_EVERY = 10
 OBJECT_ORDER = list(YCB_OBJECTS.keys())
 SEQUENCE_RELEASE_OFFSETS = {
     "cracker_box": np.array([-0.035, 0.025]),
-    "mustard_bottle": np.array([0.035, 0.020]),
+    "mustard_bottle": np.array([0.000, 0.000]),
     "sugar_box": np.array([0.000, -0.030]),
 }
 
