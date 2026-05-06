@@ -65,7 +65,7 @@
         material="cracker_box_texture" pos="0.0065 0.0071 -0.0517"
         contype="0" conaffinity="0" group="1" mass="0.001"/>
       <geom name="cracker_box_col" type="box" size="0.018 0.041 0.054"
-        contype="3" conaffinity="3" friction="1.1 0.02 0.001" condim="4" mass="0.411"
+        contype="3" conaffinity="3" friction="3.5 1.0 0.02" condim="4" mass="0.411"
         solref="0.0015 1" solimp="0.97 0.995 0.0005"
         rgba="0.95 0.85 0.2 0.0"/>
     </body>
