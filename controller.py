@@ -162,7 +162,8 @@ def move_to_target(model, data, q_target, gripper_state="open",
 def execute_pick_and_place(model, data, joint_targets, renderer=None,
                            save_frames=False, output_dir="output",
                            object_body_name=None, frame_callback=None,
-                           use_grasp_stabilizer=False):
+                           use_grasp_stabilizer=False,
+                           rrt_max_iterations=2000):
     """
     Execute the full pick-and-place sequence.
 
@@ -364,7 +365,8 @@ def execute_pick_and_place(model, data, joint_targets, renderer=None,
             from motion_planner import plan_path
 
             q_current = data.qpos[:7].copy()
-            path = plan_path(q_current, q_target, model, data)
+            path = plan_path(q_current, q_target, model, data,
+                             max_iterations=rrt_max_iterations)
 
             if path is None:
                 print(f"  [{i+1}/{total}] {label:20s} FAILED  RRT could not find a safe path")

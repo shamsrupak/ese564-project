@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from controller import MAX_GRIPPER_WIDTH, check_success, execute_pick_and_place, set_gripper
-from evaluation import BASKET_X_RANGE, BASKET_Y_RANGE, YCB_OBJECTS, randomize_scene
+from evaluation import BASKET_X_RANGE, BASKET_Y_RANGE, OBJ_X_RANGE, OBJ_Y_RANGE, YCB_OBJECTS, randomize_scene
 from grasp_planner import compute_grasp_waypoints, compute_joint_targets
 from perception import perceive_object
 
@@ -33,6 +33,12 @@ TABLE_TOP_Z = 0.40
 FRAME_DIR = "output/frames"
 RENDER_EVERY = 10
 OBJECT_ORDER = list(YCB_OBJECTS.keys())
+SEQUENCE_OBJECT_X_RANGE = OBJ_X_RANGE
+SEQUENCE_OBJECT_Y_RANGE = OBJ_Y_RANGE
+SEQUENCE_MIN_OBJECT_SEPARATION = 0.070
+SEQUENCE_OBSTACLE_X_RANGE = (0.44, 0.56)
+SEQUENCE_OBSTACLE_Y_RANGE = (-0.14, -0.07)
+OBSTACLE_Z = 0.49
 SEQUENCE_RELEASE_OFFSETS = {
     "cracker_box": np.array([-0.035, 0.025]),
     "mustard_bottle": np.array([0.000, 0.000]),
@@ -50,11 +56,16 @@ def parse_args():
     parser.add_argument("--sequence", action="store_true",
                         help="Record one continuous episode that picks every object once.")
     parser.add_argument("--episodes", type=int, default=5,
-                        help="Successful single-object episodes to record.")
+                        help="Successful episodes to record.")
     parser.add_argument("--use_gt", action="store_true",
                         help="Use simulator pose instead of camera perception for planning.")
     parser.add_argument("--sequence_perception", action="store_true",
                         help="Use camera perception during --sequence instead of simulator poses.")
+    view_group = parser.add_mutually_exclusive_group()
+    view_group.add_argument("--top_view", action="store_true",
+                            help="Record frames from the overhead camera.")
+    view_group.add_argument("--both_views", action="store_true",
+                            help="Record both the normal view and the overhead camera.")
     return parser.parse_args()
 
 
@@ -86,6 +97,7 @@ renderer = mujoco.Renderer(model, height=480, width=640)
 bsk_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "basket")
 basket_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "basket_freejoint")
 basket_qadr = model.jnt_qposadr[basket_jid]
+obstacle_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "obstacle")
 fj1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint1")
 fj2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "finger_joint2")
 fj1_dof = model.jnt_dofadr[fj1_id]
@@ -93,6 +105,20 @@ fj2_dof = model.jnt_dofadr[fj2_id]
 
 rng = np.random.default_rng(42)
 frame_count = 0
+
+
+def record_views():
+    if args.both_views:
+        return (("main", None), ("top", "overhead_cam"))
+    if args.top_view:
+        return (("top", "overhead_cam"),)
+    return (("main", None),)
+
+
+def frame_path(ep_num, view_name, frame_idx):
+    if view_name == "main":
+        return f"{FRAME_DIR}/ep{ep_num}_frame_{frame_idx:05d}.png"
+    return f"{FRAME_DIR}/ep{ep_num}_{view_name}_frame_{frame_idx:05d}.png"
 
 
 def clamp_tabletop_object_height(obj_pos, cfg):
@@ -105,45 +131,96 @@ def clamp_tabletop_object_height(obj_pos, cfg):
 def clear_episode_frames(ep_num):
     for old_frame in Path(FRAME_DIR).glob(f"ep{ep_num}_frame_*.png"):
         old_frame.unlink()
+    for old_frame in Path(FRAME_DIR).glob(f"ep{ep_num}_top_frame_*.png"):
+        old_frame.unlink()
+
+
+def sample_sequence_object_positions():
+    object_positions = {}
+    for name in OBJECT_ORDER:
+        for _ in range(200):
+            obj_x = rng.uniform(*SEQUENCE_OBJECT_X_RANGE)
+            obj_y = rng.uniform(*SEQUENCE_OBJECT_Y_RANGE)
+            candidate = np.array([obj_x, obj_y])
+            if all(np.linalg.norm(candidate - np.array(pos)) > SEQUENCE_MIN_OBJECT_SEPARATION
+                   for pos in object_positions.values()):
+                object_positions[name] = (obj_x, obj_y)
+                break
+        else:
+            safe_slots = np.array([
+                [0.555, 0.075],
+                [0.490, 0.185],
+                [0.425, 0.075],
+            ])
+            safe_slots = safe_slots[rng.permutation(len(safe_slots))]
+            return {
+                obj_name: tuple(safe_slots[idx] + rng.uniform(-0.004, 0.004, size=2))
+                for idx, obj_name in enumerate(OBJECT_ORDER)
+            }
+    return object_positions
+
+
+def sample_sequence_basket_position(object_positions):
+    for _ in range(200):
+        bsk_x = rng.uniform(*BASKET_X_RANGE)
+        bsk_y = rng.uniform(*BASKET_Y_RANGE)
+        basket_xy = np.array([bsk_x, bsk_y])
+        if all(np.linalg.norm(basket_xy - np.array(pos)) > 0.20
+               for pos in object_positions.values()):
+            return bsk_x, bsk_y
+    return rng.uniform(*BASKET_X_RANGE), rng.uniform(*BASKET_Y_RANGE)
+
+
+def randomize_sequence_obstacle():
+    if obstacle_bid < 0:
+        return
+    model.body_pos[obstacle_bid] = [
+        rng.uniform(*SEQUENCE_OBSTACLE_X_RANGE),
+        rng.uniform(*SEQUENCE_OBSTACLE_Y_RANGE),
+        OBSTACLE_Z,
+    ]
 
 
 def initialize_sequence_scene():
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
-
-    sequence_slots = {
-        "cracker_box": np.array([0.555, 0.075]),
-        "mustard_bottle": np.array([0.490, 0.185]),
-        "sugar_box": np.array([0.425, 0.075]),
-    }
+    randomize_sequence_obstacle()
+    object_positions = sample_sequence_object_positions()
 
     for name in OBJECT_ORDER:
         cfg = YCB_OBJECTS[name]
-        jitter = rng.uniform(-0.002, 0.002, size=2)
-        obj_x, obj_y = sequence_slots[name] + jitter
+        obj_x, obj_y = object_positions[name]
         obj_z = 0.40 + cfg["flat_half_height"] + 0.01
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, cfg["joint"])
         qadr = model.jnt_qposadr[jid]
         data.qpos[qadr:qadr+7] = [obj_x, obj_y, obj_z, *cfg["quat"]]
 
-    bsk_x = rng.uniform(*BASKET_X_RANGE)
-    bsk_y = rng.uniform(*BASKET_Y_RANGE)
+    bsk_x, bsk_y = sample_sequence_basket_position(object_positions)
     data.qpos[basket_qadr:basket_qadr+7] = [bsk_x, bsk_y, 0.41, 1, 0, 0, 0]
 
     mujoco.mj_forward(model, data)
     for _ in range(500):
         mujoco.mj_step(model, data)
     mujoco.mj_forward(model, data)
+    print("    init:",
+          " ".join(f"{name}=[{object_positions[name][0]:.3f},{object_positions[name][1]:.3f}]"
+                   for name in OBJECT_ORDER),
+          f"basket=[{bsk_x:.3f},{bsk_y:.3f}]",
+          f"wall=[{model.body_pos[obstacle_bid][0]:.3f},{model.body_pos[obstacle_bid][1]:.3f}]")
     return data.xpos[bsk_bid].copy()
 
 
 def save_frame(ep_num):
     global frame_count
     mujoco.mj_forward(model, data)
-    renderer.update_scene(data)
-    img = renderer.render()
-    cv2.imwrite(f"{FRAME_DIR}/ep{ep_num}_frame_{frame_count:05d}.png",
-                cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    for view_name, camera_name in record_views():
+        if camera_name is None:
+            renderer.update_scene(data)
+        else:
+            renderer.update_scene(data, camera=camera_name)
+        img = renderer.render()
+        cv2.imwrite(frame_path(ep_num, view_name, frame_count),
+                    cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     frame_count += 1
 
 
@@ -234,14 +311,23 @@ def capture_pose(active_object, gt_bsk, use_gt=False):
     return obj_pos, bsk_pos, obj_r["rotation"], grasp_width
 
 
-def plan_object(active_object, gt_bsk, use_gt=False, release_offset=None):
+def plan_object(active_object, gt_bsk, use_gt=False, release_offset=None,
+                sequence_mode=False):
     obj_pos, bsk_pos, R_obj, grasp_width = capture_pose(active_object, gt_bsk, use_gt)
     if release_offset is not None:
         bsk_pos = bsk_pos.copy()
         bsk_pos[:2] += release_offset
-    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
-                                        object_name=active_object,
-                                        grasp_width=grasp_width)
+    waypoint_kwargs = {
+        "object_name": active_object,
+        "grasp_width": grasp_width,
+    }
+    if sequence_mode and obstacle_bid >= 0:
+        waypoint_kwargs.update({
+            "wall_y": float(model.body_pos[obstacle_bid][1]),
+            "above_bin_height": 0.24,
+            "wall_clearance_z": 0.78,
+        })
+    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj, **waypoint_kwargs)
     joint_targets = compute_joint_targets(model, data, waypoints)
     return joint_targets
 
@@ -261,6 +347,7 @@ def execute_pick(ep_num, active_object, joint_targets):
         object_body_name=cfg["body"],
         frame_callback=record_controller_frame,
         use_grasp_stabilizer=False,
+        rrt_max_iterations=800,
     )
 
     mujoco.mj_forward(model, data)
@@ -302,7 +389,8 @@ def run_sequence_episode(ep_num):
         print(f"  Sequence pick: {active_object}")
         release_offset = SEQUENCE_RELEASE_OFFSETS.get(active_object)
         joint_targets = plan_object(active_object, gt_bsk, use_gt_for_sequence,
-                                    release_offset=release_offset)
+                                    release_offset=release_offset,
+                                    sequence_mode=True)
         if not all(jt["ik_success"] for jt in joint_targets):
             bad = [jt["label"] for jt in joint_targets if not jt["ik_success"]]
             print(f"    IK failed at {bad}")
@@ -320,8 +408,16 @@ def run_sequence_episode(ep_num):
 
 
 if args.sequence:
-    print("Recording one sequence episode: " + " -> ".join(OBJECT_ORDER))
-    run_sequence_episode(0)
+    print("Recording successful sequence episodes: " + " -> ".join(OBJECT_ORDER))
+    success_count = 0
+    attempt = 0
+    max_attempts = args.episodes * 5
+    while success_count < args.episodes and attempt < max_attempts:
+        print(f"\nSequence attempt {attempt + 1} -> output episode {success_count}")
+        if run_sequence_episode(success_count):
+            success_count += 1
+        attempt += 1
+    print(f"\nDone! {success_count} successful sequence episodes recorded in {FRAME_DIR}/")
 else:
     print(f"Recording {args.episodes} successful {ACTIVE_OBJECT} episodes...")
     success_count = 0
@@ -332,5 +428,14 @@ else:
         ep += 1
     print(f"\nDone! {success_count} successful episodes recorded in {FRAME_DIR}/")
 
-print(f"To compile video: ffmpeg -framerate 30 -i {FRAME_DIR}/ep<N>_frame_%05d.png "
-      f"-c:v libx264 -pix_fmt yuv420p video.mp4")
+if args.both_views:
+    print(f"To compile normal view: ffmpeg -framerate 30 -i {FRAME_DIR}/ep<N>_frame_%05d.png "
+          f"-c:v libx264 -pix_fmt yuv420p video.mp4")
+    print(f"To compile top view:    ffmpeg -framerate 30 -i {FRAME_DIR}/ep<N>_top_frame_%05d.png "
+          f"-c:v libx264 -pix_fmt yuv420p video_top.mp4")
+elif args.top_view:
+    print(f"To compile top-view video: ffmpeg -framerate 30 -i {FRAME_DIR}/ep<N>_top_frame_%05d.png "
+          f"-c:v libx264 -pix_fmt yuv420p video_top.mp4")
+else:
+    print(f"To compile video: ffmpeg -framerate 30 -i {FRAME_DIR}/ep<N>_frame_%05d.png "
+          f"-c:v libx264 -pix_fmt yuv420p video.mp4")
