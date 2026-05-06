@@ -11,6 +11,7 @@ Usage:
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -166,6 +167,36 @@ def merge_episode_frames(output_path, episode_count, view_name):
     return total_frames
 
 
+def make_vscode_friendly(output_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        print(
+            f"ffmpeg was not found, so {output_path} was left in OpenCV mp4v format."
+        )
+        return False
+
+    temp_path = output_path.with_name(f"{output_path.stem}_h264_tmp{output_path.suffix}")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i", str(output_path),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(temp_path),
+    ]
+
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        if temp_path.exists():
+            temp_path.unlink()
+        print(f"ffmpeg conversion failed for {output_path}; keeping the OpenCV mp4v file.")
+        return False
+
+    temp_path.replace(output_path)
+    return True
+
+
 def main():
     args = parse_args()
     cmd = record_video_args(args)
@@ -182,9 +213,11 @@ def main():
 
     for view_name, output_path in outputs.items():
         total_frames = merge_episode_frames(output_path, episode_count, view_name)
+        converted = make_vscode_friendly(output_path)
+        codec_note = "H.264/yuv420p" if converted else "OpenCV mp4v"
         print(
             f"\nMerged {episode_count} successful episodes "
-            f"({total_frames} {view_name} frames) into {output_path}"
+            f"({total_frames} {view_name} frames) into {output_path} ({codec_note})"
         )
 
 
