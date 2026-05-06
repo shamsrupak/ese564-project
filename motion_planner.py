@@ -238,7 +238,7 @@ def smooth_path(path, model, data, max_iters=200):
     return smoothed
 
 
-def plan_path(q_start, q_goal, model, data, rng=None):
+def plan_path(q_start, q_goal, model, data, rng=None, max_iterations=2000):
     """
     High-level path planning function.
 
@@ -264,7 +264,7 @@ def plan_path(q_start, q_goal, model, data, rng=None):
         return [q_start, q_goal]
 
     # Run RRT
-    path = rrt(q_start, q_goal, model, data, rng)
+    path = rrt(q_start, q_goal, model, data, rng, max_iterations=max_iterations)
     if path is None:
         return None
 

@@ -2,91 +2,213 @@
 ## Shams Rupak & Sowmya Cheripally
 
 ### Overview
-A Franka Emika Panda 7-DOF robot picks objects from randomized positions on a
-tabletop and places them into a basket whose position also varies between episodes.
-Uses classical computer vision (HSV segmentation + depth back-projection) for
-perception and model-based planning (Jacobian IK + PD control) for manipulation.
+
+This project simulates a Franka Emika Panda robot performing tabletop pick-and-place with YCB-style objects. The scene includes randomized object poses, a randomized basket, and a wall obstacle. The robot uses RGB-D perception, grasp planning, inverse kinematics, RRT-style collision checking, and PD control to pick objects and drop them into the basket.
+
+Objects currently supported:
+
+- `cracker_box`
+- `mustard_bottle`
+- `sugar_box`
 
 ### Setup
 
-​```bash
+Run the setup script first:
+
+```bash
 chmod +x setup.sh
 ./setup.sh
-​```
-
-`setup.sh` installs Python dependencies, clones MuJoCo Menagerie, injects
-the wrist camera into `panda.xml` (used for ICP refinement during the
-approach phase), and creates the `output/` directory. It is idempotent —
-safe to re-run.
 ```
 
-### Running the Evaluation
+The script installs dependencies, downloads MuJoCo Menagerie, and creates the output folders.
 
-```bash
-# Run the main evaluation (the professor should run this)
-python evaluation.py --num_episodes 10
+### Important Panda XML Step
 
-# Full evaluation (50 episodes)
-python evaluation.py --num_episodes 50
+This project includes a modified Panda robot XML file at:
 
-# With debug images saved
-python evaluation.py --num_episodes 10 --save_images
-
-# Headless mode (no display, for servers)
-MUJOCO_GL=egl python evaluation.py --num_episodes 10
+```text
+panda.xml
 ```
 
-### Recording Video
+After downloading MuJoCo Menagerie, replace the Menagerie Panda XML with this project’s root-level file:
 
 ```bash
-# Record frames from 5 successful episodes
-python record_video.py
+cp panda.xml mujoco_menagerie/franka_emika_panda/panda.xml
+```
 
-# Compile frames into video (requires ffmpeg)
+This is needed because the project version adds the wrist camera used by the perception pipeline. If you keep the default `mujoco_menagerie/franka_emika_panda/panda.xml`, the scene may load, but wrist-camera functionality can be missing.
+
+### Evaluation
+
+Run all three objects:
+
+```bash
+python3 evaluation.py --num_episodes 50
+```
+
+Run one object:
+
+```bash
+python3 evaluation.py --num_episodes 50 --object cracker_box
+python3 evaluation.py --num_episodes 50 --object mustard_bottle
+python3 evaluation.py --num_episodes 50 --object sugar_box
+```
+
+Save debug images:
+
+```bash
+python3 evaluation.py --num_episodes 10 --save_images
+```
+
+### Recording Videos
+
+`record_video.py` records successful episodes as image frame sequences. This is the lower-level recording script. It does not directly create one final merged video file; after running it, you still need a separate video compilation step if you want an `.mp4`.
+
+```bash
+python3 record_video.py --object cracker_box
+python3 record_video.py --sequence
+```
+
+By default, `record_video.py --sequence` records the first 5 successful full sequences in this order:
+
+```text
+cracker_box -> mustard_bottle -> sugar_box
+```
+
+Record a top-view video frame sequence:
+
+```bash
+python3 record_video.py --sequence --top_view
+```
+
+Record normal view and top view simultaneously:
+
+```bash
+python3 record_video.py --sequence --both_views
+```
+
+The generated frames are saved in:
+
+```text
+output/frames/
+```
+
+For example, one episode is stored as files like:
+
+```text
+output/frames/ep0_frame_00000.png
+output/frames/ep0_frame_00001.png
+...
+```
+
+To manually turn one frame sequence into a video, run a separate command such as:
+
+```bash
 ffmpeg -framerate 30 -i output/frames/ep0_frame_%05d.png \
        -c:v libx264 -pix_fmt yuv420p video_ep0.mp4
 ```
 
+### Recording and Merging Videos
+
+`record_merged_video.py` is a convenience wrapper around `record_video.py`. It accepts the same main input options, runs `record_video.py` for you, then automatically merges the successful episode frames into one finished `.mp4`.
+
+Use this script when you want to avoid the extra manual `ffmpeg` step:
+
+```bash
+python3 record_merged_video.py --sequence
+```
+
+This records successful episodes, merges them, and writes:
+
+```text
+video_sequence_merged.mp4
+```
+
+Top view only:
+
+```bash
+python3 record_merged_video.py --sequence --top_view
+```
+
+Output:
+
+```text
+video_sequence_merged_top.mp4
+```
+
+Both views:
+
+```bash
+python3 record_merged_video.py --sequence --both_views
+```
+
+Outputs:
+
+```text
+video_sequence_merged.mp4
+video_sequence_merged_top.mp4
+```
+
+In short:
+
+```text
+record_video.py         -> records frames only
+record_merged_video.py  -> records frames, merges them, and outputs final mp4 files
+```
+
+For most final demonstrations, use `record_merged_video.py`.
+
+### Useful Options
+
+Use simulator poses instead of camera perception:
+
+```bash
+python3 evaluation.py --num_episodes 50 --use_gt
+python3 record_merged_video.py --sequence --use_gt
+```
+
+Use camera perception during sequence recording:
+
+```bash
+python3 record_merged_video.py --sequence --sequence_perception
+```
+
+Change the number of successful episodes:
+
+```bash
+python3 record_merged_video.py --sequence --episodes 3
+```
+
 ### Project Structure
 
-```
-pick_and_place/
-  evaluation.py         # Main entry point - runs randomized episodes
-  perception.py         # HSV segmentation + depth back-projection + PCA + ICP
-  grasp_planner.py      # Grasp waypoints + Jacobian pseudo-inverse IK
-  controller.py         # PD controller + trajectory execution
-  record_video.py       # Record frames from successful episodes
-  report.tex            # Final report (LaTeX source)
-  report.pdf            # Final report (compiled PDF)
-  README.md             # This file
-  mujoco_menagerie/     # Panda robot model (cloned from GitHub)
-    franka_emika_panda/
-      pick_and_place_scene.xml   # Our scene (table, basket, obstacle, object)
-      panda.xml                   # Robot definition
-      assets/                     # Robot mesh files
-  output/               # Saved images and results
+```text
+.
+├── controller.py                 # PD control, gripper control, trajectory execution
+├── evaluation.py                 # Main randomized evaluation script
+├── grasp_planner.py              # Waypoints and inverse kinematics
+├── motion_planner.py             # Collision-aware path planning helpers
+├── perception.py                 # HSV/depth/ICP perception pipeline
+├── pick_and_place_scene.xml      # Main MuJoCo scene
+├── record_video.py               # Records successful episodes as frames
+├── record_merged_video.py        # Records and merges successful episodes into mp4
+├── panda.xml                     # Modified Panda XML to copy into MuJoCo Menagerie
+├── objects/                      # YCB textured object assets
+├── mujoco_menagerie/             # Downloaded robot assets
+└── output/                       # Saved frames, images, and generated videos
 ```
 
 ### Pipeline
 
-1. **Perception**: Overhead RGB-D camera -> HSV color segmentation -> depth
-   back-projection to 3D point cloud -> centroid estimation
-2. **Grasp Planning**: Top-down antipodal grasp with 7 Cartesian waypoints
-   (approach, pre-grasp, descend, close, lift, transport, release)
-3. **Inverse Kinematics**: Damped Jacobian pseudo-inverse IK converts Cartesian
-   waypoints to 7-DOF joint angles (with retry from alternative configs)
-4. **Controller**: Built-in PD servo + supplementary torques for tight tracking;
-   combined descent+settle+close for reliable grasping
+1. **Perception**: RGB-D camera observations are segmented with HSV masks and projected into 3D.
+2. **Grasp Planning**: The planner generates approach, pre-grasp, descend, close, lift, wall-clear, above-bin, release, and retreat waypoints.
+3. **Inverse Kinematics**: Cartesian waypoints are converted into Panda joint targets.
+4. **Motion Planning**: RRT-style checks are used for collision-aware transitions around the wall.
+5. **Control**: A PD controller tracks joint trajectories and commands the gripper.
+6. **Evaluation**: Success is checked by whether the object lands inside the basket.
 
-### Results
-- Success rate: ~82% average across 90 randomized episodes (3 seeds x 30 episodes)
-- Perception accuracy: ~50mm total (XY: ~5mm, Z: ~30mm due to top-surface-only view)
-- IK accuracy: 2-5mm
-- Mean placement accuracy: 12mm (for successful grasps)
-- Mean execution time: ~3 seconds per episode
+### Notes
 
-### Homework Connections
-- HW1 (Coordinate Transforms): Camera-to-world back-projection
-- HW2 (FK/IK): Jacobian pseudo-inverse inverse kinematics
-- HW3 (RRT): Motion planning framework (collision checking concepts)
-- HW4 (ICP): Point cloud registration framework in perception.py
+- Generated frames are saved in `output/frames/`.
+- Merged videos are written to the project root.
+- The top-view camera is `overhead_cam` in `pick_and_place_scene.xml`.
+- If VS Code cannot preview a generated video, install `ffmpeg` and rerun `record_merged_video.py`; the wrapper will convert the output to a VS Code-friendly codec.

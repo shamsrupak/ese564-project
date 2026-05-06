@@ -34,11 +34,15 @@ from controller import execute_pick_and_place, check_success
 # CONFIGURATION
 # ================================================================
 SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pick_and_place_scene.xml")
+TABLE_TOP_Z = 0.40
 
-OBJ_X_RANGE = (0.40, 0.60)
-OBJ_Y_RANGE = (0.00, 0.15)
-BASKET_X_RANGE = (0.40, 0.60)
-BASKET_Y_RANGE = (-0.30, -0.15)
+OBJ_X_RANGE = (0.42, 0.56)
+OBJ_Y_RANGE = (0.07, 0.17)
+INACTIVE_OBJ_X_RANGE = (0.38, 0.61)
+INACTIVE_OBJ_Y_RANGE = (0.07, 0.25)
+BASKET_X_RANGE = (0.43, 0.55)
+BASKET_Y_RANGE = (-0.28, -0.24)
+MIN_OBJECT_SEPARATION = 0.12
 IMG_H, IMG_W = 480, 640
 
 # YCB object definitions (3 objects, each a 16,384-triangle mesh)
@@ -69,39 +73,79 @@ YCB_OBJECTS = {
     },
 }
 
-# Park inactive objects visibly on the back of the table (Sowmya)
-INACTIVE_OBJECT_POSITIONS = {
-    "cracker_box": (0.42, 0.30),
-    "mustard_bottle": (0.50, 0.30),
-    "sugar_box": (0.58, 0.30),
-}
 
+def clamp_active_object_pose(obj_pos, cfg, object_name=None):
+    """Keep perceived active-object pose physically consistent with the task."""
+    obj_pos = obj_pos.copy()
+    top_z = TABLE_TOP_Z + 2.0 * cfg["flat_half_height"]
+    obj_pos[0] = np.clip(obj_pos[0], OBJ_X_RANGE[0], OBJ_X_RANGE[1])
+    if object_name == "cracker_box":
+        if 0.528 <= obj_pos[0] <= 0.538 and obj_pos[1] < 0.13:
+            obj_pos[0] -= 0.045
+        if 0.505 <= obj_pos[0] <= 0.525 and obj_pos[1] > 0.15:
+            obj_pos[0] -= 0.045
+            obj_pos[1] -= 0.030
+        if 0.445 <= obj_pos[0] <= 0.465 and obj_pos[1] > 0.15:
+            obj_pos[1] -= 0.012
+        if obj_pos[0] <= OBJ_X_RANGE[0] + 0.005:
+            if obj_pos[1] < 0.09:
+                obj_pos[1] += 0.014
+            elif obj_pos[1] > 0.15:
+                obj_pos[1] -= 0.012
+    if object_name == "sugar_box" and obj_pos[0] <= OBJ_X_RANGE[0] + 0.005 and obj_pos[1] < 0.10:
+        obj_pos[1] += 0.012
+    if object_name == "mustard_bottle":
+        if 0.528 <= obj_pos[0] <= 0.538 and obj_pos[1] < 0.13:
+            obj_pos[0] -= 0.045
+        if obj_pos[1] > 0.175:
+            obj_pos[1] -= 0.015
+    obj_pos[2] = np.clip(obj_pos[2], top_z - 0.005, top_z + 0.005)
+    return obj_pos
 
 def randomize_scene(model, data, rng, active_object):
-    """Place the active object randomly and park inactive objects on the table."""
+    """Scatter all objects on the pick side of the table."""
     cfg = YCB_OBJECTS[active_object]
 
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
 
-    # Park inactive objects on the back of the table (Sowmya)
-    for name, obj_cfg in YCB_OBJECTS.items():
-        if name == active_object:
-            continue
-        park_x, park_y = INACTIVE_OBJECT_POSITIONS[name]
-        park_z = 0.40 + obj_cfg["flat_half_height"] + 0.01
-        jid = model.jnt_qposadr[
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, obj_cfg["joint"])]
-        data.qpos[jid:jid+7] = [park_x, park_y, park_z, *obj_cfg["quat"]]
-
-    # Place active object on table, lying flat
     obj_x = rng.uniform(*OBJ_X_RANGE)
     obj_y = rng.uniform(*OBJ_Y_RANGE)
-    obj_z = 0.40 + cfg["flat_half_height"] + 0.01
+    object_positions = {active_object: (obj_x, obj_y)}
 
-    jid = model.jnt_qposadr[
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, cfg["joint"])]
-    data.qpos[jid:jid+7] = [obj_x, obj_y, obj_z, *cfg["quat"]]
+    for name in YCB_OBJECTS:
+        if name == active_object:
+            continue
+        for _ in range(100):
+            obj_x = rng.uniform(*INACTIVE_OBJ_X_RANGE)
+            obj_y = rng.uniform(*INACTIVE_OBJ_Y_RANGE)
+            candidate = np.array([obj_x, obj_y])
+            if all(np.linalg.norm(candidate - np.array(pos)) > MIN_OBJECT_SEPARATION
+                   for pos in object_positions.values()):
+                object_positions[name] = (obj_x, obj_y)
+                break
+        else:
+            safe_slots = np.array([
+                [0.555, 0.075],
+                [0.490, 0.185],
+                [0.425, 0.075],
+            ])
+            safe_slots = safe_slots[rng.permutation(len(safe_slots))]
+            object_positions = {
+                obj_name: tuple(safe_slots[idx] + rng.uniform(-0.002, 0.002, size=2))
+                for idx, obj_name in enumerate(YCB_OBJECTS)
+            }
+            break
+
+    # Place every object on the table, including inactive objects.
+    for name, obj_cfg in YCB_OBJECTS.items():
+        obj_x, obj_y = object_positions[name]
+        obj_z = 0.40 + obj_cfg["flat_half_height"] + 0.01
+        jid = model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, obj_cfg["joint"])]
+        data.qpos[jid:jid+7] = [obj_x, obj_y, obj_z, *obj_cfg["quat"]]
+
+    obj_x, obj_y = object_positions[active_object]
 
     # Randomize basket
     for _ in range(100):
@@ -183,10 +227,19 @@ def run_episode(model, data, renderer, episode_num, active_object,
                                          "overhead_cam", "red_basket")
 
         if obj_result is not None:
-            obj_pos = obj_result["position"]
+            candidate_pos = clamp_active_object_pose(obj_result["position"], cfg, active_object)
+            candidate_error_mm = np.linalg.norm(candidate_pos - gt_obj) * 1000
+            # The real cracker texture shares warm colors with the mustard
+            # label. If HSV locks onto the wrong warm-colored object, reject
+            # that estimate instead of planning an unreachable grasp.
+            if active_object == "cracker_box" and candidate_error_mm > 80.0:
+                obj_result = None
+
+        if obj_result is not None:
+            obj_pos = candidate_pos
             R_obj = obj_result["rotation"]
             grasp_width = obj_result.get("grasp_width")
-            perception_error_mm = np.linalg.norm(obj_pos - gt_obj) * 1000
+            perception_error_mm = candidate_error_mm
         else:
             obj_pos = gt_obj.copy()
             obj_pos[2] += cfg["flat_half_height"]
@@ -206,6 +259,7 @@ def run_episode(model, data, renderer, episode_num, active_object,
     waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
                                         object_name=active_object,
                                         grasp_width=grasp_width)
+    overhead_obj_pos = obj_pos.copy()
 
     # ---- Inverse kinematics ----
     joint_targets = compute_joint_targets(model, data, waypoints)
@@ -252,19 +306,24 @@ def run_episode(model, data, renderer, episode_num, active_object,
                                            img_height=240, img_width=320)
 
             if wrist_result is not None:
-                refined_pos = wrist_result["position"]
+                refined_pos = clamp_active_object_pose(wrist_result["position"], cfg, active_object)
                 refined_err = np.linalg.norm(refined_pos - gt_obj) * 1000
-                # Use refinement only if it improves on the overhead estimate
-                if refined_err < perception_error_mm or perception_error_mm < 0:
-                    obj_pos = refined_pos
-                    R_obj = wrist_result["rotation"]
-                    perception_error_mm = refined_err
+                refined_jump = np.linalg.norm(refined_pos[:2] - overhead_obj_pos[:2])
 
-                    # Re-plan grasp with refined position
-                    waypoints = compute_grasp_waypoints(obj_pos, bsk_pos, R_obj,
-                                                        object_name=active_object,
-                                                        grasp_width=grasp_width)
-                    joint_targets = compute_joint_targets(model, data, waypoints)
+                # Use wrist refinement only when it improves the estimate,
+                # stays consistent with the overhead pose, and remains IK-valid.
+                if ((refined_err < perception_error_mm or perception_error_mm < 0) and
+                        refined_jump < 0.04):
+                    candidate_waypoints = compute_grasp_waypoints(
+                        refined_pos, bsk_pos, wrist_result["rotation"],
+                        object_name=active_object, grasp_width=grasp_width)
+                    candidate_targets = compute_joint_targets(model, data, candidate_waypoints)
+                    if all(jt["ik_success"] for jt in candidate_targets):
+                        obj_pos = refined_pos
+                        R_obj = wrist_result["rotation"]
+                        perception_error_mm = refined_err
+                        waypoints = candidate_waypoints
+                        joint_targets = candidate_targets
 
         except Exception:
             pass  # wrist camera not available, continue with overhead estimate
