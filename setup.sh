@@ -33,7 +33,7 @@ echo "  Found: $PYVER"
 # ---- Step 2: Install dependencies ----
 echo ""
 echo "[2/5] Installing Python packages..."
-pip3 install mujoco numpy opencv-python-headless trimesh scipy
+pip3 install 'mujoco==3.2.3' numpy opencv-python-headless trimesh scipy
 echo "  Done."
 
 # ---- Step 3: Clone MuJoCo Menagerie ----
